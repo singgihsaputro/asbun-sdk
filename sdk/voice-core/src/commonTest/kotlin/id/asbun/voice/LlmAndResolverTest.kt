@@ -36,7 +36,7 @@ class HttpLlmClientTest {
         locale = "id-ID",
         context = TRIP.toJson(),
         tools = tools,
-        systemPrompt = LlmTools.systemPrompt("id-ID", TRIP.toJson()),
+        systemPrompt = LlmTools.systemPrompt("id-ID"),
     )
 
     private class Captured {
@@ -88,9 +88,17 @@ class HttpLlmClientTest {
         assertEquals("2026-10-21", captured.headers["anthropic-version"])
         val body = captured.body!!
         assertEquals("test-model", body["model"]?.jsonPrimitive?.content)
-        assertEquals("256", body["max_tokens"]?.jsonPrimitive?.content)
+        assertEquals("4096", body["max_tokens"]?.jsonPrimitive?.content)
         assertEquals("low", body["output_config"]?.jsonObject?.get("effort")?.jsonPrimitive?.content)
         assertFalse(body.containsKey("temperature"))
+        assertFalse(body.containsKey("fallbacks"), "refusal fallback is opt-in on a plain LlmConfig")
+        assertEquals(null, captured.headers["anthropic-beta"])
+        // Stable system prompt with a cache breakpoint; screen data and transcript in the user turn.
+        val system = body["system"]!!.jsonArray.single().jsonObject
+        assertEquals(request.systemPrompt, system["text"]?.jsonPrimitive?.content)
+        assertEquals("ephemeral", system["cache_control"]?.jsonObject?.get("type")?.jsonPrimitive?.content)
+        val user = body["messages"]!!.jsonArray.single().jsonObject["content"]?.jsonPrimitive?.content.orEmpty()
+        assertTrue(user.contains("<context>") && user.contains("T-9") && user.contains("<transcript>${request.transcript}</transcript>"))
         val choice = body["tool_choice"]!!.jsonObject
         assertEquals("auto", choice["type"]?.jsonPrimitive?.content)
         assertEquals("true", choice["disable_parallel_tool_use"]?.jsonPrimitive?.content)
@@ -141,7 +149,8 @@ class HttpLlmClientTest {
         assertEquals("auto", body["tool_choice"]?.jsonPrimitive?.content)
         val messages = body["messages"]!!.jsonArray
         assertEquals("system", messages[0].jsonObject["role"]?.jsonPrimitive?.content)
-        assertEquals(request.transcript, messages[1].jsonObject["content"]?.jsonPrimitive?.content)
+        assertEquals(LlmTools.userMessage(request.transcript, request.context), messages[1].jsonObject["content"]?.jsonPrimitive?.content)
+        assertFalse(messages[0].jsonObject["content"]?.jsonPrimitive?.content.orEmpty().contains("T-9"), "system prompt stays the same on every screen")
         assertEquals("function", body["tools"]!!.jsonArray.first().jsonObject["type"]?.jsonPrimitive?.content)
 
         assertEquals("traffic_report", decision.toolName)
@@ -167,7 +176,7 @@ class HttpLlmClientTest {
     @Test
     fun errorsBecomeTypedLlmExceptions() = runTest {
         val config = LlmConfig("https://llm.example.com", "m", LlmProtocol.ANTHROPIC_MESSAGES, apiKey = "k", timeoutMs = 300)
-        val http = assertFailsWith<LlmException> { client(config, status = HttpStatusCode.InternalServerError, response = "{}").decideReal(request) }
+        val http = assertFailsWith<LlmException> { client(config, status = HttpStatusCode.BadRequest, response = "{}").decideReal(request) }
         assertEquals(VoiceErrorCode.LLM_HTTP_ERROR, http.code)
         val invalid = assertFailsWith<LlmException> { client(config, response = "not json").decideReal(request) }
         assertEquals(VoiceErrorCode.LLM_INVALID_RESPONSE, invalid.code)

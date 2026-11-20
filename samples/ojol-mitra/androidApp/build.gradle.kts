@@ -7,17 +7,21 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
-// Optional LLM fallback for voice commands, read from the (git-ignored) root local.properties:
-//   voice.llm.baseUrl=https://api.anthropic.com
+// Optional LLM for voice commands the keywords miss, read from the (git-ignored) root local.properties.
+// Claude, with your Anthropic API key:
+//   voice.claude.apiKey=<key>
+//   voice.claude.model=<model id>             (optional; default Claude.DEFAULT_MODEL)
+// Or another provider:
+//   voice.llm.baseUrl=https://...
 //   voice.llm.model=<model id>
-//   voice.llm.protocol=ANTHROPIC_MESSAGES   (or OPENAI_COMPATIBLE, CUSTOM_JSON)
+//   voice.llm.protocol=OPENAI_COMPATIBLE      (or ANTHROPIC_MESSAGES, CUSTOM_JSON)
 //   voice.llm.apiKey=<key>
 val localProps = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) file.inputStream().use { load(it) }
 }
 fun voiceProp(name: String, default: String = "") =
-    "\"" + (localProps.getProperty("voice.llm.$name") ?: default).replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+    "\"" + (localProps.getProperty("voice.$name") ?: default).replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
 android {
     namespace = "id.ojolmitra.driver.android"
@@ -29,10 +33,12 @@ android {
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = 1
         versionName = "1.0.0"
-        buildConfigField("String", "VOICE_LLM_BASE_URL", voiceProp("baseUrl"))
-        buildConfigField("String", "VOICE_LLM_MODEL", voiceProp("model"))
-        buildConfigField("String", "VOICE_LLM_PROTOCOL", voiceProp("protocol", "OPENAI_COMPATIBLE"))
-        buildConfigField("String", "VOICE_LLM_API_KEY", voiceProp("apiKey"))
+        buildConfigField("String", "VOICE_CLAUDE_API_KEY", voiceProp("claude.apiKey"))
+        buildConfigField("String", "VOICE_CLAUDE_MODEL", voiceProp("claude.model"))
+        buildConfigField("String", "VOICE_LLM_BASE_URL", voiceProp("llm.baseUrl"))
+        buildConfigField("String", "VOICE_LLM_MODEL", voiceProp("llm.model"))
+        buildConfigField("String", "VOICE_LLM_PROTOCOL", voiceProp("llm.protocol", "OPENAI_COMPATIBLE"))
+        buildConfigField("String", "VOICE_LLM_API_KEY", voiceProp("llm.apiKey"))
     }
     buildFeatures {
         compose = true

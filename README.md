@@ -2,7 +2,7 @@
 
 This repository holds two things:
 
-- **[Voice Command SDK](#voice-command-sdk)** (`sdk/`): a Kotlin Multiplatform library that turns speech into app actions on Android and iOS. An app lists its commands in a JSON manifest (phrases mapped to a deeplink or a handler), tells the SDK what is on screen, and can plug in any LLM by URL and API key for phrasing the keywords miss.
+- **[Voice Command SDK](#voice-command-sdk)** (`sdk/`): a Kotlin Multiplatform library that turns speech into app actions on Android and iOS. An app lists its commands in a JSON manifest (phrases mapped to a deeplink or a handler), tells the SDK what is on screen, and can hand the phrasing that keywords miss to Claude (with an Anthropic API key) or to any LLM by URL and key.
 - **[Ojol Mitra](#ojol-mitra-technical-guide)** (`samples/ojol-mitra/`): a ride-hailing driver app prototype, and the SDK's first consumer.
 
 ## Voice Command SDK
@@ -45,8 +45,8 @@ Version 1 of the [SDK plan](#voice-command-sdk-plan) is implemented: manifest, o
        config = VoiceConfig(
            locale = "id-ID",
            dispatch = DispatchConfig(allowedSchemes = listOf("myapp")),
-           // Optional LLM for free-form phrasing; leave it out to stay fully on-device.
-           llm = LlmConfig(baseUrl = "https://llm-proxy.example.com", model = "your-model-id", tokenProvider = { api.voiceToken() }),
+           // Optional: Claude for free-form phrasing. Leave it out to stay fully on-device.
+           llm = Claude.config(apiKey = BuildConfig.CLAUDE_API_KEY),
        ),
        manifest = CommandManifest.fromJson(assets.open("voice-commands.json").bufferedReader().readText()),
        requestPermission = { micPermission.launch(Manifest.permission.RECORD_AUDIO) },
@@ -60,10 +60,40 @@ Version 1 of the [SDK plan](#voice-command-sdk-plan) is implemented: manifest, o
 
 The Ojol Mitra sample uses every feature: [`OjolMitraVoice.kt`](samples/ojol-mitra/shared/src/commonMain/kotlin/id/ojolmitra/driver/voice/OjolMitraVoice.kt) holds its 23-command manifest, and [`DriverController.kt`](samples/ojol-mitra/shared/src/commonMain/kotlin/id/ojolmitra/driver/core/DriverController.kt) its deeplink router, handlers and context.
 
+### Claude
+
+`Claude.config(apiKey)` connects the SDK to the Claude API (Anthropic Messages API) with the settings below. Keyword matching still runs first on the device; Claude only sees what the keywords miss (`KEYWORD_FIRST`).
+
+```kotlin
+VoiceConfig(locale = "id-ID", llm = Claude.config(apiKey = "sk-ant-..."))
+// Another model, more thinking, a proxy that holds the key, or token accounting:
+Claude.config(
+    model = "claude-haiku-5-5",
+    effort = "medium",
+    baseUrl = "https://llm-proxy.example.com",
+    tokenProvider = { api.voiceToken() },
+    onUsage = { usage -> metrics.record(usage.inputTokens, usage.outputTokens, usage.cacheReadInputTokens) },
+)
+```
+
+| Setting | Default | Why |
+| --- | --- | --- |
+| `model` | `Claude.DEFAULT_MODEL` (Claude Opus 5.5) | Any Claude model id works; a smaller model trades capability for price and speed |
+| `effort` | `low` | Sent as `output_config.effort`. Current models always think; picking one command for one sentence needs little of it |
+| `timeoutMs` | 6000 | Thinking takes longer than a plain HTTP round trip. On timeout the user hears "not understood" |
+| `maxTokens` | 4096 | A ceiling, not a target: thinking counts toward it, and you pay only for what is used |
+| `refusalFallback` | on for models that support it | Sends `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`): if a safety classifier declines, the API retries on the model Anthropic recommends, in the same call. Turn it off when `baseUrl` is a proxy to Bedrock, Vertex AI or Foundry |
+| `promptCaching` | on | One `cache_control` breakpoint covers the tools and system prompt; the screen data and transcript come after it. Cache reads bill at a tenth of the input price, and the cache is shared by every user of the app on the same screen |
+| `onUsage` | not set | Token counts per call, including cache reads and whether a fallback model answered |
+
+Errors come back as `LlmException` with `httpStatus` and the API's `errorType` (for example `authentication_error` for a wrong key). One retry happens inside the timeout for overloads, server errors and rate limits that send `retry-after`; a 429 without it, a spend cap, is not retried. Calling the Claude API without a key fails at once, before any request.
+
+**Keys:** a key built into an APK or IPA can be extracted. Use `apiKey` for development and internal builds; in production, point `baseUrl` at your own proxy that holds the key, or fetch short-lived tokens with `tokenProvider`.
+
 ### Build and test the SDK
 
 ```bash
-./gradlew :sdk:voice-core:testDebugUnitTest            # 46 unit tests: manifest, matcher, deeplinks, LLM protocols on a mock server, resolver, dialog
+./gradlew :sdk:voice-core:testDebugUnitTest            # 56 unit tests: manifest, matcher, deeplinks, Claude and the other LLM protocols on a mock server, resolver, dialog
 ./gradlew :sdk:voice-android:assembleRelease           # Android library (AAR)
 ./gradlew :sdk:voice-ios:compileKotlinIosArm64         # type-checks the iOS engine; works on Linux and Windows too
 ./gradlew :sdk:voice-ios:assembleVoiceSdkXCFramework   # VoiceSdk.xcframework; needs a Mac with Xcode
@@ -196,7 +226,7 @@ Running the prototype costs nothing: speech recognition, text-to-speech and the 
 | `AVSpeechSynthesizer` | iOS | Assistant's spoken replies | Free | Runs on the device. |
 | City map | Both | Map, routes, traffic markers | US$0 | Drawn with Compose Canvas: no Google Maps or MapKit, no key, no per-load billing. |
 | Backend | None | Orders, customers, reports | US$0 | Everything is simulated on the device. |
-| LLM fallback (optional) | Both | Phrasing the manifest's keywords miss | Per token, billed by your provider | Off unless configured; see [How to turn on the LLM fallback](#turn-on-the-llm-fallback). |
+| Claude, or another LLM (optional) | Both | Phrasing the manifest's keywords miss | Per token, billed by Anthropic or your provider | Off unless configured; see [Turn on Claude](#turn-on-claude). |
 
 **Developer accounts (only for distribution):**
 
@@ -328,26 +358,24 @@ Every push that changes code runs the [Android APK workflow](.github/workflows/a
 ### Run the tests
 
 ```bash
-./gradlew :sdk:voice-core:testDebugUnitTest                         # 46 SDK unit tests
+./gradlew :sdk:voice-core:testDebugUnitTest                         # 56 SDK unit tests
 ./gradlew :samples:ojol-mitra:shared:testDebugUnitTest              # 32 app tests: manifest phrases, map routing, controller flow by voice
 ./gradlew :samples:ojol-mitra:androidApp:testDebugUnitTest          # end-to-end UI journey on Robolectric, screenshots in samples/ojol-mitra/androidApp/screenshots/
 ./gradlew :samples:ojol-mitra:shared:compileKotlinIosSimulatorArm64 # type-checks the app's and the SDK's iOS Kotlin code (also works on Linux and Windows)
 ```
 
-### Turn on the LLM fallback
+### Turn on Claude
 
-Without an LLM, only the manifest's phrases are understood. With one, the SDK sends what the keywords miss to your LLM, which picks one of the manifest's commands; the answer is validated before anything runs.
+Without an LLM, only the manifest's phrases are understood. With Claude, the SDK sends what the keywords miss to the Claude API, which picks one of the manifest's commands; the answer is validated before anything runs. Settings and defaults are under [Claude](#claude).
 
-- **Android sample:** add these keys to `local.properties` in the repository root (the file is git-ignored), then rebuild:
+- **Android sample:** add your Anthropic API key to `local.properties` in the repository root (the file is git-ignored), then rebuild:
   ```properties
-  voice.llm.baseUrl=https://api.anthropic.com
-  voice.llm.protocol=ANTHROPIC_MESSAGES
-  voice.llm.model=your-model-id
-  voice.llm.apiKey=your-api-key
+  voice.claude.apiKey=your-anthropic-api-key
   ```
-  `protocol` can also be `OPENAI_COMPATIBLE` (any `/chat/completions` gateway) or `CUSTOM_JSON` (your own `/resolve` endpoint).
-- **iOS sample:** pass an `LlmConfig` to `OjolMitraVoice.config(llm = ...)` in `MainViewController.kt`.
-- A key built into an app can be extracted from it. For production, point `baseUrl` at your own proxy or use `tokenProvider`, as described in [Security, privacy and cost](#security-privacy-and-cost).
+  `voice.claude.model` picks another model; the default is `Claude.DEFAULT_MODEL`.
+- **iOS sample:** pass `Claude.config(apiKey = "...")` to `OjolMitraVoice.config(llm = ...)` in `MainViewController.kt`.
+- **Another provider:** set `voice.llm.baseUrl`, `voice.llm.model`, `voice.llm.protocol` (`OPENAI_COMPATIBLE` or `CUSTOM_JSON`) and `voice.llm.apiKey` instead.
+- A key built into an app can be extracted from it, so keep these builds internal. For production, see [Security, privacy and cost](#security-privacy-and-cost).
 
 ### Add a voice command
 
@@ -384,6 +412,8 @@ Most first-run problems come from the iOS build calling Gradle, or from missing 
 | Assistant speaks with a foreign accent | No Indonesian TTS voice installed | Android: Settings > Text-to-speech > install Indonesian. iOS: Settings > Accessibility > Spoken Content > Voices > Indonesian |
 | Android build: dependency "requires compileSdk 37" | Compose Multiplatform was upgraded to 1.12+, or Ktor's OkHttp engine was added | Stay on Compose 1.11.x and Ktor's Android engine, or move to AGP 9 with compileSdk 37 |
 | Assistant answers "perintah tidak bisa dijalankan" | The deeplink's scheme is not in `dispatch.allowedSchemes`, the router returned false, or no handler is registered for the command | Add the scheme to the allowlist, return true from `onDeeplink` when handled, and register every handler named in the manifest |
+| Claude never answers; the log shows `LLM_HTTP_ERROR` 401 `authentication_error` | Wrong or revoked Anthropic API key | Check `voice.claude.apiKey` (Android sample) or the key passed to `Claude.config` |
+| Claude answers fail with "stopped at max_tokens" | The thinking plus the tool call did not fit in `maxTokens` | Raise `maxTokens`, or lower `effort` |
 | Assistant answers "perintah belum dikenali" to a listed phrase | The command's `when` does not match the context, or the phrase covers less than 80% of the sentence | Check `syncVoiceContext()` and add the phrasing to the manifest |
 | No iOS simulator target on an Intel Mac | `iosX64` is not built | Use an Apple Silicon Mac or a real iPhone |
 | iOS stops listening too early or too late | Silence detection ends a request 1.3 s after the last new word (7 s with no speech) | Tune `dialog.endOfSpeechMs` and `dialog.listenTimeoutMs` in `VoiceConfig` |
@@ -394,12 +424,12 @@ The SDK, the Android build and all shared logic are tested. The iOS Kotlin code 
 
 | Check | Result | How it was checked |
 | --- | --- | --- |
-| SDK unit tests (46) | Pass | `./gradlew :sdk:voice-core:testDebugUnitTest` |
+| SDK unit tests (56) | Pass | `./gradlew :sdk:voice-core:testDebugUnitTest` |
 | App unit tests (32) | Pass | `./gradlew :samples:ojol-mitra:shared:testDebugUnitTest` |
 | Android debug APK | Pass | `./gradlew :samples:ojol-mitra:androidApp:assembleDebug` (about 20 MB) |
 | Android end-to-end UI journey | Pass | Robolectric + Roborazzi, through the SDK: online, offer, accept by voice, chat by voice, traffic report by voice and by form, trip stages, completion, other tabs |
 | iOS Kotlin compile (SDK and app; iosArm64, iosSimulatorArm64) | Pass | Kotlin 2.4 compiler, including the Speech, AVFAudio and UIKit calls |
-| LLM fallback against a real provider | Not verified | All three protocols are tested against a mock server; no real key was used |
+| Claude and the other LLM protocols against a live API | Not verified | Request and response shapes are tested against a mock server that follows the current Claude API docs; no real key was used |
 | Xcode project file | Structure valid | Parsed with a pbxproj parser; all references resolve. Not opened in Xcode |
 | iOS link, launch and speech on device | Not verified | Needs a Mac with Xcode |
 | Real microphone recognition on Android | Not verified | Tests inject transcripts; no emulator was available |
@@ -490,6 +520,11 @@ An app configures the SDK with one `VoiceConfig`, built in code or loaded from J
 | `llm.model` | string | not set | Model id sent in each request |
 | `llm.timeoutMs` | int | 3000 | After this, fall back to the keyword result or ask the user to repeat |
 | `llm.extraHeaders` | map | empty | Extra headers, e.g. an API version |
+| `llm.maxTokens` | int | 4096 | `ANTHROPIC_MESSAGES` only: output ceiling, thinking included |
+| `llm.effort` | string | `low` | `ANTHROPIC_MESSAGES` only: `output_config.effort` |
+| `llm.refusalFallback` | bool | false (on in `Claude.config` for models that support it) | `ANTHROPIC_MESSAGES` only: send `fallbacks: "default"` |
+| `llm.promptCaching` | bool | true | `ANTHROPIC_MESSAGES` only: cache the tools and system prompt |
+| `llm.onUsage` | function | not set | Token counts after each call (not in JSON) |
 | `locale` | BCP 47 tag | `id-ID` | Speech and matching language, e.g. `id-ID` |
 | `resolution.mode` | enum | `KEYWORD_FIRST` | `KEYWORD_FIRST`, `LLM_FIRST`, `KEYWORD_ONLY` or `LLM_ONLY` |
 | `resolution.keywordMinScore` | 0 to 1 | 0.8 | Keyword matches below this go to the LLM |
@@ -503,7 +538,7 @@ An app configures the SDK with one `VoiceConfig`, built in code or loaded from J
 | `privacy.redactor` | function | not set | Strips personal data from the transcript before an LLM call |
 | `logging.level` | enum | `NONE` | `NONE`, `ERROR` or `DEBUG` (DEBUG never logs keys) |
 
-The same settings as JSON, for remote config. The API key is deliberately absent: it comes from `tokenProvider` at runtime.
+The same settings as JSON, for remote config. The API key is deliberately absent: add it at runtime with `withLlmApiKey(...)` or `withLlmTokenProvider { ... }`. For Claude, `"claude": {"model": ..., "effort": ...}` replaces the `llm` block and starts from the `Claude.config` defaults.
 
 ```json
 {
@@ -632,25 +667,27 @@ The SDK turns the manifest into LLM tools (one function per command) and sends o
 
 **Tool generation:** each command becomes a function named after its `id` with dots replaced by underscores (`order.accept` becomes `order_accept`), since function names allow only letters, digits, `_` and `-`, up to 64 characters. Its `description` is copied, and its `speech` and `both` parameters become a JSON Schema. Parameters filled from context are left out, so the LLM cannot invent an order id. Every schema also gets a reserved `confidence` number (0 to 1).
 
-**System prompt (template):**
+**System prompt (template):** the same for every request in a locale, so it can be cached with the tools. The screen data and the transcript go in the user message instead: `<context>{contextJson}</context>` (left out when `privacy.sendContextToLlm` is off) and `<transcript>...</transcript>`.
 
 ```text
 You map one spoken request from a mobile app user to exactly one app command.
-Language: {locale}. Current screen and data: {contextJson}.
+Language: {locale}. The user message holds the current screen and its data in <context>,
+when the app shares it, and what the user said in <transcript>.
 Call the single matching tool, with parameter values taken from the transcript.
 Set confidence to how sure you are.
 If nothing matches or the request is ambiguous, call no tool and reply with one
 short question in {locale}.
 ```
 
-**`ANTHROPIC_MESSAGES`** (POST `{baseUrl}/v1/messages`; headers `x-api-key`, `anthropic-version: 2026-10-21`, `content-type: application/json`):
+**`ANTHROPIC_MESSAGES`**, which `Claude.config` uses (POST `{baseUrl}/v1/messages`; headers `x-api-key`, `anthropic-version: 2026-10-21`, `content-type: application/json`, and `anthropic-beta: server-side-fallback-2026-07-01` when `refusalFallback` is on):
 
 ```json
 {
   "model": "<model id>",
-  "max_tokens": 256,
+  "max_tokens": 4096,
   "output_config": { "effort": "low" },
-  "system": "<system prompt above>",
+  "fallbacks": "default",
+  "system": [ { "type": "text", "text": "<system prompt above>", "cache_control": { "type": "ephemeral" } } ],
   "tools": [
     {
       "name": "chat_send",
@@ -668,11 +705,11 @@ short question in {locale}.
     }
   ],
   "tool_choice": { "type": "auto", "disable_parallel_tool_use": true },
-  "messages": [ { "role": "user", "content": "bilang ke penumpang saya kejebak macet" } ]
+  "messages": [ { "role": "user", "content": "<context>{\"screen\":\"trip\",...}</context>\n<transcript>bilang ke penumpang saya kejebak macet</transcript>" } ]
 }
 ```
 
-The answer is a `tool_use` content block (`stop_reason: "tool_use"`) with `name` and `input`, or a text block holding the clarifying question. A `stop_reason` of `refusal` is treated as no match. Forced `tool_choice` (`any` or a named tool) is rejected by current models, so the SDK always sends `auto`, and `disable_parallel_tool_use` keeps it to one call. `strict: true` makes the arguments match the schema exactly. The request sends no `temperature`, which API version `2026-10-21` rejects.
+The SDK checks `stop_reason` before reading `content`: `refusal` (after any fallback also declined) is treated as no match, and `max_tokens` is an error, because the tool call may be cut off. Otherwise the answer is a `tool_use` content block with `name` and `input`, or a text block holding the clarifying question; `thinking` and `fallback` blocks are skipped. Forced `tool_choice` (`any` or a named tool) is rejected by current models, so the SDK always sends `auto`, and `disable_parallel_tool_use` keeps it to one call. `strict: true` makes the arguments match the schema exactly, so the schema uses no numeric limits (strict tools reject `minimum` and `maximum`). The request sends no `temperature`, which API version `2026-10-21` rejects, and no `thinking`, which current models keep on; `effort` sets its depth. `usage` (including `cache_read_input_tokens` and the `fallback_message` entries in `usage.iterations`) goes to `onUsage`.
 
 **`OPENAI_COMPATIBLE`** (POST `{baseUrl}/chat/completions`; header `Authorization: Bearer <key>`), the shape most gateways and self-hosted servers accept:
 
@@ -738,6 +775,7 @@ The app creates one `VoiceSdk` instance, gives it a config and a manifest, wires
 
 | Call | Purpose |
 | --- | --- |
+| `Claude.config(apiKey)` | LLM settings for the Claude API, see [Claude](#claude) |
 | `VoiceSdkAndroid.create(context, config, manifest)`, `VoiceSdkIos.create(config, manifest)` | Build the instance with the platform's speech engine; `VoiceSdk(config, manifest, engine, scope)` takes any engine |
 | `updateManifest(manifest)` | Swap commands at runtime, e.g. after a remote config fetch |
 | `setContext(context)` | Current screen and values |
@@ -758,10 +796,8 @@ val voice = VoiceSdkAndroid.create(
     context = applicationContext,
     config = VoiceConfig(
         locale = "id-ID",
-        llm = LlmConfig(
-            baseUrl = "https://llm-proxy.example.com",
-            protocol = LlmProtocol.ANTHROPIC_MESSAGES,
-            model = "your-model-id",
+        llm = Claude.config(
+            baseUrl = "https://llm-proxy.example.com",   // your proxy holds the Anthropic key
             tokenProvider = { authApi.fetchVoiceToken() },
         ),
         dispatch = DispatchConfig(allowedSchemes = listOf("ojolmitra")),
@@ -816,7 +852,7 @@ Speech-to-text and text-to-speech use free platform APIs, so the running cost is
 | Claude Sonnet 5.5 | 2.00 | 10.00 | 0.0050 | 250.00 |
 | Claude Haiku 5.5 | 0.10 | 0.50 | 0.00025 | 12.50 |
 
-Anthropic list prices as of 2026-11-03 ([pricing](https://platform.claude.com/docs/en/about-claude/pricing)); other providers differ. 50,000 calls a day is, for example, 1,000 drivers each making 250 utterances, of which 20% reach the LLM. Three levers cut the bill without code changes: `KEYWORD_FIRST` keeps routine phrases off the LLM; prompt caching of the stable system prompt and tool list bills those tokens at the cached-read rate (US$0.20 per 1M instead of US$4.00 on Opus 5.5); and `effort: low` keeps thinking tokens, which bill as output, small.
+Anthropic list prices as of 2026-11-03 ([pricing](https://platform.claude.com/docs/en/about-claude/pricing)); other providers differ. 50,000 calls a day is, for example, 1,000 drivers each making 250 utterances, of which 20% reach the LLM. Three levers cut the bill without code changes, and `Claude.config` turns all three on: `KEYWORD_FIRST` keeps routine phrases off the LLM; prompt caching of the stable system prompt and tool list bills those tokens at the cached-read rate (US$0.20 per 1M instead of US$4.00 on Opus 5.5); and `effort: low` keeps thinking tokens, which bill as output, small. `onUsage` reports `cacheReadInputTokens`: if it stays at 0 across repeated calls on the same screen, the cache is not being hit.
 
 ### Packaging and rollout
 

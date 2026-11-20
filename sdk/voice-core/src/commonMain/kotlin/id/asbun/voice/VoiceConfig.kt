@@ -19,7 +19,8 @@ public enum class ResolutionMode { KEYWORD_FIRST, LLM_FIRST, KEYWORD_ONLY, LLM_O
 public enum class LogLevel { NONE, ERROR, DEBUG }
 
 /**
- * Connection to the LLM used when keywords cannot decide.
+ * Connection to the LLM used when keywords cannot decide. For Claude, build it with
+ * [Claude.config], which fills in the endpoint, protocol and recommended settings.
  *
  * Production apps should not ship a provider key: point [baseUrl] at your own proxy, or fetch a
  * short-lived token with [tokenProvider]. [apiKey] is meant for development and internal builds.
@@ -34,9 +35,22 @@ public data class LlmConfig(
     val authHeader: String? = null,
     val timeoutMs: Long = 3_000,
     val extraHeaders: Map<String, String> = emptyMap(),
-    val maxTokens: Int = 256,
+    /**
+     * ANTHROPIC_MESSAGES only. A ceiling, not a target: you pay for the tokens used. It must leave
+     * room for thinking, which current Claude models always do and which counts toward it.
+     */
+    val maxTokens: Int = DEFAULT_MAX_TOKENS,
     /** ANTHROPIC_MESSAGES only: sent as `output_config.effort`; null leaves it out. */
     val effort: String? = "low",
+    /**
+     * ANTHROPIC_MESSAGES only: send `fallbacks: "default"` so a safety decline is retried
+     * server-side on another model. Only some models and platforms accept it; see [Claude].
+     */
+    val refusalFallback: Boolean = false,
+    /** ANTHROPIC_MESSAGES only: mark the tools and system prompt with `cache_control`. */
+    val promptCaching: Boolean = true,
+    /** Called after each answered request with the token counts, e.g. to watch cost and cache hits. */
+    val onUsage: ((LlmUsage) -> Unit)? = null,
 ) {
     init {
         require(baseUrl.startsWith("https://") || isLocalDebugUrl(baseUrl)) {
@@ -48,8 +62,10 @@ public data class LlmConfig(
         "LlmConfig(baseUrl=$baseUrl, model=$model, protocol=$protocol, apiKey=${if (apiKey != null) "***" else "null"}, " +
             "tokenProvider=${tokenProvider != null}, timeoutMs=$timeoutMs)"
 
-    private companion object {
-        fun isLocalDebugUrl(url: String): Boolean =
+    public companion object {
+        public const val DEFAULT_MAX_TOKENS: Int = 4_096
+
+        private fun isLocalDebugUrl(url: String): Boolean =
             url.startsWith("http://localhost") || url.startsWith("http://127.0.0.1") || url.startsWith("http://10.0.2.2")
     }
 }
@@ -143,15 +159,37 @@ public data class VoiceConfig(
     val logLevel: LogLevel = LogLevel.NONE,
     val messages: VoiceMessages = VoiceMessages.forLocale(locale),
 ) {
+    /** The same config with an API key for its LLM, e.g. after [fromJson], which never reads keys. */
+    public fun withLlmApiKey(apiKey: String): VoiceConfig = copy(llm = llm?.copy(apiKey = apiKey))
+
+    /** The same config with a token provider for its LLM (short-lived tokens from your backend). */
+    public fun withLlmTokenProvider(tokenProvider: suspend () -> String): VoiceConfig =
+        copy(llm = llm?.copy(tokenProvider = tokenProvider))
+
     public companion object {
         /**
          * Reads the JSON form shown in the spec. Secrets are deliberately not read from JSON:
-         * set `llm.apiKey` or `llm.tokenProvider` in code with `copy(...)`.
+         * add them in code with [withLlmApiKey] or [withLlmTokenProvider].
+         *
+         * `"claude": {"model": ..., "effort": ..., "timeoutMs": ..., "baseUrl": ...}` sets up Claude
+         * with [Claude.config] defaults; `"llm": {...}` configures any provider field by field.
          */
         public fun fromJson(json: String): VoiceConfig {
             val root = Json.parseToJsonElement(json).jsonObject
             val locale = root.string("locale") ?: "id-ID"
-            val llm = (root["llm"] as? JsonObject)?.let { o ->
+            val claude = (root["claude"] as? JsonObject)?.let { o ->
+                val model = o.string("model") ?: Claude.DEFAULT_MODEL
+                Claude.config(
+                    model = model,
+                    effort = o.string("effort") ?: Claude.DEFAULT_EFFORT,
+                    timeoutMs = o.long("timeoutMs") ?: Claude.DEFAULT_TIMEOUT_MS,
+                    baseUrl = o.string("baseUrl") ?: Claude.API_URL,
+                    refusalFallback = o.bool("refusalFallback") ?: Claude.supportsRefusalFallback(model),
+                    promptCaching = o.bool("promptCaching") ?: true,
+                    maxTokens = o.int("maxTokens") ?: LlmConfig.DEFAULT_MAX_TOKENS,
+                )
+            }
+            val llm = claude ?: (root["llm"] as? JsonObject)?.let { o ->
                 LlmConfig(
                     baseUrl = o.string("baseUrl") ?: throw IllegalArgumentException("llm.baseUrl is required"),
                     model = o.string("model") ?: throw IllegalArgumentException("llm.model is required"),
@@ -159,8 +197,10 @@ public data class VoiceConfig(
                     authHeader = o.string("authHeader"),
                     timeoutMs = o.long("timeoutMs") ?: 3_000,
                     extraHeaders = (o["extraHeaders"] as? JsonObject)?.mapValues { it.value.jsonPrimitive.content } ?: emptyMap(),
-                    maxTokens = o.int("maxTokens") ?: 256,
+                    maxTokens = o.int("maxTokens") ?: LlmConfig.DEFAULT_MAX_TOKENS,
                     effort = if (o.containsKey("effort")) o.string("effort") else "low",
+                    refusalFallback = o.bool("refusalFallback") ?: false,
+                    promptCaching = o.bool("promptCaching") ?: true,
                 )
             }
             val resolution = (root["resolution"] as? JsonObject)?.let { o ->

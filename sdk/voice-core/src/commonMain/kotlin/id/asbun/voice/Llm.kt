@@ -19,7 +19,30 @@ public enum class VoiceErrorCode {
     HANDLER_FAILED,
 }
 
-public class LlmException(public val code: VoiceErrorCode, message: String, cause: Throwable? = null) : Exception(message, cause)
+public class LlmException(
+    public val code: VoiceErrorCode,
+    message: String,
+    cause: Throwable? = null,
+    /** HTTP status when the endpoint answered with an error, e.g. 401 for a wrong API key. */
+    public val httpStatus: Int? = null,
+    /** The provider's error type when it sent one, e.g. `authentication_error` or `rate_limit_error`. */
+    public val errorType: String? = null,
+) : Exception(message, cause)
+
+/** Token use of one LLM request, passed to [LlmConfig.onUsage]. */
+public data class LlmUsage(
+    /** The model that produced the answer; differs from the configured one after a refusal fallback. */
+    val model: String?,
+    val inputTokens: Long,
+    val outputTokens: Long,
+    /** Prompt tokens read from the prompt cache (billed at a fraction of the input price). */
+    val cacheReadInputTokens: Long = 0,
+    /** Prompt tokens written to the prompt cache. */
+    val cacheCreationInputTokens: Long = 0,
+    /** True when a fallback model answered after the configured model declined. */
+    val servedByFallback: Boolean = false,
+    val latencyMs: Long = 0,
+)
 
 /** One manifest command offered to the LLM as a function. */
 public data class LlmTool(
@@ -94,13 +117,24 @@ public object LlmTools {
             LlmTool(toolName(command.id), command.id, command.description, schema)
         }
 
-    public fun systemPrompt(locale: String, context: JsonObject): String =
+    /**
+     * The same for every request in a locale, so providers can cache it together with the tools.
+     * What changes per request (screen data, transcript) goes in [userMessage].
+     */
+    public fun systemPrompt(locale: String): String =
         """
         You map one spoken request from a mobile app user to exactly one app command.
-        Language: $locale. Current screen and data: $context.
+        Language: $locale. The user message holds the current screen and its data in <context>,
+        when the app shares it, and what the user said in <transcript>.
         Call the single matching tool, with parameter values taken from the transcript.
         Set confidence to how sure you are.
         If nothing matches or the request is ambiguous, call no tool and reply with one
         short question in $locale.
         """.trimIndent()
+
+    /** The per-request part: screen data (left out when empty) and the transcript. */
+    public fun userMessage(transcript: String, context: JsonObject): String = buildString {
+        if (context.isNotEmpty()) append("<context>").append(context.toString()).append("</context>\n")
+        append("<transcript>").append(transcript).append("</transcript>")
+    }
 }
