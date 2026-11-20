@@ -147,7 +147,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "if [ \"YES\" = \"$OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED\" ]; then\n  echo \"Skipping Gradle build (OVERRIDE_KOTLIN_BUILD_IDE_SUPPORTED=YES)\"\n  exit 0\nfi\n# Pakai JDK bawaan Android Studio bila JAVA_HOME belum di-set\nif [ -z \"$JAVA_HOME\" ] && [ -d \"/Applications/Android Studio.app/Contents/jbr/Contents/Home\" ]; then\n  export JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\"\nfi\ncd \"$SRCROOT/../../..\"\n./gradlew :samples:ojol-mitra:shared:embedAndSignAppleFrameworkForXcode\n";
+			shellScript = "/bin/sh \"$SRCROOT/build-kotlin-framework.sh\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

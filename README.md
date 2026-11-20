@@ -236,7 +236,7 @@ Matching rules worth knowing (all set in the manifest, none in code):
 
 ### Prerequisites
 
-- JDK 17 or newer (the JDK bundled with Android Studio works).
+- JDK 17 to 24. The project's Gradle 8.14 does not run on JDK 25 or newer. If your only JDK is newer, for example the one bundled with Android Studio, install JDK 21 (`brew install --cask temurin@21`).
 - Android Studio, recent release, with Android SDK platform 36.
 - For iOS: a Mac with Apple Silicon and Xcode 16 or newer. Intel Mac simulators are not supported, because Compose Multiplatform 1.11+ dropped the `iosX64` target.
 
@@ -257,7 +257,7 @@ Every push that changes code runs the [Android APK workflow](.github/workflows/a
 
 1. Open the project once in Android Studio, or set `ANDROID_HOME`. The shared and SDK modules also target Android, so Gradle needs the SDK path even for iOS builds.
 2. Open `samples/ojol-mitra/iosApp/iosApp.xcodeproj` in Xcode.
-3. Pick an iPhone simulator and Run. The "Compile Kotlin Framework" build phase runs `./gradlew :samples:ojol-mitra:shared:embedAndSignAppleFrameworkForXcode` from the repository root for you.
+3. Pick an iPhone simulator and Run. The "Compile Kotlin Framework" build phase runs `samples/ojol-mitra/iosApp/build-kotlin-framework.sh`, which picks a JDK 17 to 24 and runs `./gradlew :samples:ojol-mitra:shared:embedAndSignAppleFrameworkForXcode` from the repository root for you.
 4. On a real iPhone, set Signing & Capabilities > Team (a free Personal Team works) and change the bundle id `id.ojolmitra.driver` if Xcode reports it is taken.
 5. Allow Microphone and Speech Recognition when asked.
 
@@ -310,8 +310,10 @@ Most first-run problems come from the iOS build calling Gradle, or from missing 
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Xcode build phase "Compile Kotlin Framework" fails with "SDK location not found" | The shared and SDK modules also target Android, so Gradle needs the Android SDK path | Open the project once in Android Studio, or `export ANDROID_HOME=~/Library/Android/sdk` |
-| Xcode build phase: "Unable to locate a Java Runtime" | Xcode's shell does not inherit `JAVA_HOME` | The script falls back to Android Studio's bundled JDK in `/Applications`; otherwise install JDK 17+ or set `JAVA_HOME` in the build phase |
+| Xcode build phase "Compile Kotlin Framework" fails with "SDK location not found" | The shared and SDK modules also target Android, so Gradle needs the Android SDK path | Open the project once in Android Studio, or put `sdk.dir=/Users/<you>/Library/Android/sdk` in `local.properties` at the repository root. An `ANDROID_HOME` exported in your shell profile does not reach Xcode |
+| Gradle (in Terminal or Xcode) fails with `Failed command: /usr/bin/xcrun xcodebuild -version` | The Mac uses the standalone Command Line Tools instead of Xcode | `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`, then `./gradlew --stop` and build again |
+| Xcode build phase: "What went wrong:" followed only by a version such as `25.0.4` | Gradle ran on JDK 25 or newer; Gradle 8.14 runs on JDK 17 to 24 | Install JDK 21 (`brew install --cask temurin@21`). The build script prefers a registered JDK 21 over a newer `JAVA_HOME` or Android Studio JDK |
+| Xcode build phase: "No JDK 17 to 24 found" or "Unable to locate a Java Runtime" | Xcode's shell does not inherit `JAVA_HOME`, and the script found no JDK 17 to 24 | Install JDK 21, or add a User-Defined build setting `JAVA_HOME` pointing to a JDK 17 to 24. The script also checks JDKs registered with macOS (`/usr/libexec/java_home`), Homebrew's `openjdk@21` and `openjdk@17`, and Android Studio's bundled JDK |
 | Xcode: "Sandbox: deny file-read" during the Kotlin build phase | User script sandboxing is on | Keep `ENABLE_USER_SCRIPT_SANDBOXING = NO` (already set in the project) |
 | Link error: undefined symbol `SFSpeechRecognizer` or `AVSpeechSynthesizer` | Speech or AVFoundation not linked | Keep `-framework Speech -framework AVFoundation` in Other Linker Flags (already set) |
 | iOS app stops at launch with a message about `CADisableMinimumFrameDurationOnPhone` | Compose Multiplatform checks this Info.plist key | Keep the key in `samples/ojol-mitra/iosApp/iosApp/Info.plist` if you replace that file |
