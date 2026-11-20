@@ -1,6 +1,77 @@
+# asbun-sdk
+
+This repository holds two things:
+
+- **[Voice Command SDK](#voice-command-sdk)** (`sdk/`): a Kotlin Multiplatform library that turns speech into app actions on Android and iOS. An app lists its commands in a JSON manifest (phrases mapped to a deeplink or a handler), tells the SDK what is on screen, and can plug in any LLM by URL and API key for phrasing the keywords miss.
+- **[Ojol Mitra](#ojol-mitra-technical-guide)** (`samples/ojol-mitra/`): a ride-hailing driver app prototype, and the SDK's first consumer.
+
+## Voice Command SDK
+
+Version 1 of the [SDK plan](#voice-command-sdk-plan) is implemented: manifest, on-device keyword matcher, LLM fallback over three protocols, validation, context, deeplink allowlist, confirmation, slot filling, handlers, and the Android and iOS speech engines. Not done yet: publishing to Maven and Swift Package Manager, and a run on a Mac (the iOS code compiles, but has not been linked or launched).
+
+| Module | Contents |
+| --- | --- |
+| `sdk/voice-core` | `VoiceSdk` (listen, resolve, ask, dispatch, speak), `CommandManifest`, `KeywordMatcher`, `IntentResolver`, `HttpLlmClient`, `Deeplinks`, and the `VoiceEngine` interface. Kotlin Multiplatform: Android and iOS. |
+| `sdk/voice-android` | `AndroidVoiceEngine` (SpeechRecognizer + TextToSpeech), `AndroidLinkOpener`, `VoiceSdkAndroid.create(...)`. Declares `RECORD_AUDIO`. |
+| `sdk/voice-ios` | `IosVoiceEngine` (SFSpeechRecognizer + AVAudioEngine + AVSpeechSynthesizer), `IosLinkOpener`, `VoiceSdkIos.create(...)`. Builds `VoiceSdk.xcframework`. |
+
+### Quick start
+
+1. List your commands in a manifest. The full format is under [Command manifest](#command-manifest).
+
+   ```json
+   {
+     "version": 1,
+     "defaultLocale": "id-ID",
+     "commands": [
+       {
+         "id": "order.accept",
+         "description": "Accept the incoming order shown on screen.",
+         "phrases": ["terima", "ambil", "gas"],
+         "when": { "screen": "order_offer" },
+         "params": [ { "name": "orderId", "from": "context", "required": true } ],
+         "action": { "type": "deeplink", "url": "myapp://order/{orderId}/accept" },
+         "reply": "Order diterima."
+       }
+     ]
+   }
+   ```
+
+2. Create the SDK, route its deeplinks, tell it what is on screen, and listen. Android is shown; on iOS, call `VoiceSdkIos.create(config, manifest)` instead.
+
+   ```kotlin
+   val voice = VoiceSdkAndroid.create(
+       context = this,
+       config = VoiceConfig(
+           locale = "id-ID",
+           dispatch = DispatchConfig(allowedSchemes = listOf("myapp")),
+           // Optional LLM for free-form phrasing; leave it out to stay fully on-device.
+           llm = LlmConfig(baseUrl = "https://llm-proxy.example.com", model = "your-model-id", tokenProvider = { api.voiceToken() }),
+       ),
+       manifest = CommandManifest.fromJson(assets.open("voice-commands.json").bufferedReader().readText()),
+       requestPermission = { micPermission.launch(Manifest.permission.RECORD_AUDIO) },
+   )
+   voice.onDeeplink { url -> router.open(url); true }   // true = handled in the app
+   voice.setContext(VoiceContext(screen = "order_offer", values = mapOf("orderId" to "OM-1")))
+   micButton.setOnClickListener { voice.startListening() }
+   ```
+
+3. Draw your voice UI from `voice.state` (a `StateFlow`) and `voice.events`, or from `voice.addEventListener { }`, which calls back synchronously and is the easiest option from Swift. Call `voice.close()` when you are done; it releases the microphone and text-to-speech.
+
+The Ojol Mitra sample uses every feature: [`OjolMitraVoice.kt`](samples/ojol-mitra/shared/src/commonMain/kotlin/id/ojolmitra/driver/voice/OjolMitraVoice.kt) holds its 23-command manifest, and [`DriverController.kt`](samples/ojol-mitra/shared/src/commonMain/kotlin/id/ojolmitra/driver/core/DriverController.kt) its deeplink router, handlers and context.
+
+### Build and test the SDK
+
+```bash
+./gradlew :sdk:voice-core:testDebugUnitTest            # 46 unit tests: manifest, matcher, deeplinks, LLM protocols on a mock server, resolver, dialog
+./gradlew :sdk:voice-android:assembleRelease           # Android library (AAR)
+./gradlew :sdk:voice-ios:compileKotlinIosArm64         # type-checks the iOS engine; works on Linux and Windows too
+./gradlew :sdk:voice-ios:assembleVoiceSdkXCFramework   # VoiceSdk.xcframework; needs a Mac with Xcode
+```
+
 # Ojol Mitra: Technical Guide
 
-Ojol Mitra is a Kotlin Multiplatform prototype of a ride-hailing driver app for Android and iOS. One shared Kotlin codebase holds the UI, the order simulation and the voice assistant, and every library it uses is free and open source.
+Ojol Mitra is a Kotlin Multiplatform prototype of a ride-hailing driver app for Android and iOS. One shared Kotlin codebase holds the UI and the order simulation, voice commands run on the Voice Command SDK from this repository, and every library it uses is free and open source.
 
 > The design is inspired by ojol (ojek online) driver apps: green theme, full-screen map, bottom-sheet order card, slide-to-confirm. It uses no third-party logos, brand names or assets. The name "Ojol Mitra", the icon, the map and all data are fictional.
 
@@ -20,67 +91,75 @@ Screenshots are generated by the Android end-to-end UI test (Robolectric + Robor
 - **Trip:** the driver moves along the route on the map; remaining distance and ETA; slide-to-confirm for each stage (pickup, start trip, arrive, complete).
 - **Chat** with a simulated customer who replies in context; simulated phone call.
 - **Earnings and performance:** today's earnings, wallet (cash-order commission), acceptance, completion, rating, trip history; **Autobid** accepts orders automatically.
-- **Voice commands (Indonesian):** accept or reject orders, send chat to the customer, report traffic, move through trip stages, all hands-free. See the [voice command reference](#voice-command-reference).
+- **Voice commands (Indonesian):** accept or reject orders, send chat to the customer, report traffic, move through trip stages, all hands-free, through the Voice Command SDK with an optional LLM fallback. See the [voice command reference](#voice-command-reference).
 - **Typing mode** in the voice panel for emulators and simulators without a microphone.
 
 ## Architecture
 
-The app uses Kotlin Multiplatform with Compose Multiplatform: about 90% of the code (5,425 of about 6,100 lines) sits in one shared module, and only the speech engines are written per platform.
+The app uses Kotlin Multiplatform with Compose Multiplatform. All UI and app logic (about 5,300 lines) sits in one shared module; speech lives in the SDK's platform modules, so each app only creates the SDK and shows `App()`.
 
 ```mermaid
 flowchart TB
     subgraph apps["Apps"]
-        A1["<b>androidApp</b> (Kotlin)<br/>MainActivity asks for the mic permission,<br/>creates AndroidVoiceEngine, shows App()"]
-        A2["<b>iosApp</b> (SwiftUI)<br/>ContentView wraps MainViewController()<br/>about 25 lines of Swift, no app logic"]
+        A1["<b>androidApp</b> (Kotlin)<br/>MainActivity asks for the mic permission,<br/>creates the SDK with VoiceSdkAndroid.create()"]
+        A2["<b>iosApp</b> (SwiftUI)<br/>ContentView wraps MainViewController(),<br/>which uses VoiceSdkIos.create()"]
     end
-    subgraph shared["shared / commonMain: all UI and logic, written once in Kotlin"]
+    subgraph shared["samples/ojol-mitra/shared: all UI and app logic, written once in Kotlin"]
         UI["<b>Compose UI</b><br/>home, offer, trip, chat, traffic, earnings, assistant;<br/>city map drawn on Canvas"]
-        DC["<b>DriverController</b><br/>dispatches orders, trip stages,<br/>chat, reports; state as StateFlow"]
-        VP["<b>VoiceCommandParser</b><br/>Indonesian text to command<br/>rule-based, no AI"]
+        DC["<b>DriverController</b><br/>orders, trip stages, chat, reports;<br/>deeplink router and voice handlers"]
+        MF["<b>OjolMitraVoice</b><br/>command manifest (JSON)<br/>and SDK config"]
         SIM["<b>Simulation</b><br/>OrderFactory, CustomerBot,<br/>CityMap streets and routes"]
-        VA["<b>VoiceAssistant</b><br/>listen, process, speak;<br/>queues replies, re-prompts twice"]
-        VE["<b>VoiceEngine</b> (interface)<br/>startListening, speak, cancel"]
     end
-    AE["<b>androidMain: AndroidVoiceEngine</b><br/>SpeechRecognizer + TextToSpeech"]
-    IE["<b>iosMain: IosVoiceEngine</b> (Kotlin/Native)<br/>SFSpeechRecognizer + AVAudioEngine<br/>+ AVSpeechSynthesizer"]
-    A1 -->|"App(engine)"| UI
+    subgraph sdk["Voice Command SDK (sdk/)"]
+        VS["<b>voice-core: VoiceSdk</b><br/>listen, resolve, ask, dispatch, speak"]
+        RS["<b>KeywordMatcher + IntentResolver</b><br/>manifest phrases first,<br/>optional LLM fallback"]
+        VE["<b>VoiceEngine</b> (interface)"]
+    end
+    AE["<b>voice-android: AndroidVoiceEngine</b><br/>SpeechRecognizer + TextToSpeech"]
+    IE["<b>voice-ios: IosVoiceEngine</b> (Kotlin/Native)<br/>SFSpeechRecognizer + AVAudioEngine<br/>+ AVSpeechSynthesizer"]
+    A1 -->|"App { VoiceSdkAndroid.create() }"| UI
     A2 -->|"MainViewController()"| UI
     UI <-->|"taps down, state up"| DC
-    DC -->|parse| VP
     DC -->|uses| SIM
-    DC <-->|"speak / heard text"| VA
-    VA --> VE
+    MF -->|"manifest + config"| VS
+    DC -->|"setContext, speak"| VS
+    VS -->|"deeplink or handler call"| DC
+    VS --> RS
+    VS --> VE
     VE -.->|Android build| AE
     VE -.->|iOS build| IE
 ```
 
-Read it top down: each app only creates its voice engine and shows `App()`; everything else is shared, and the controller talks to speech only through the `VoiceEngine` interface.
+Read it top down: each app only creates the SDK with its platform's engine and shows `App()`; the controller never touches speech directly. It tells the SDK what is on screen, and the SDK calls back with a deeplink or a handler call once it has understood a command.
 
-- **State:** `DriverController` exposes two `StateFlow`s. One holds orders, trip, chat, reports and earnings; the other holds the driver's position, updated 25 times a second so only the map redraws.
-- **Threading:** controller code and all engine callbacks run on the main thread. Coroutine `delay`s drive timers, offer countdowns and driver movement.
+- **State:** `DriverController` exposes two `StateFlow`s. One holds orders, trip, chat, reports and earnings; the other holds the driver's position, updated 25 times a second so only the map redraws. The voice UI combines the SDK's `state` with `VoicePanel` (panel, dictation, history).
+- **Threading:** controller code, SDK callbacks and all engine callbacks run on the main thread. Coroutine `delay`s drive timers, offer countdowns and driver movement.
 - **Native code:** the iOS engine is Kotlin/Native calling Apple's Speech and AVFAudio APIs directly, so the Swift side is a thin wrapper.
 - **Map:** `CityMap` is a fictional street grid with shortest-path routing between intersections, drawn on a Compose Canvas instead of a map SDK.
-- **Folders:** `shared/src/commonMain` (UI, logic), `androidMain` and `iosMain` (voice engines), `commonTest` (unit tests), `androidApp`, `iosApp`.
 
 ```
 .
-├── shared/src/
-│   ├── commonMain/kotlin/id/ojolmitra/driver/
-│   │   ├── core/      DriverController, DriverState, SimTiming
-│   │   ├── voice/     VoiceCommandParser, VoiceAssistant, VoiceEngine, Speech
-│   │   ├── sim/       OrderFactory, CustomerBot
-│   │   ├── map/       CityMap
-│   │   └── ui/        screens/, components/, theme/
-│   ├── androidMain/   AndroidVoiceEngine, platform helpers
-│   ├── iosMain/       IosVoiceEngine, MainViewController
-│   └── commonTest/    parser, map and controller tests
-├── androidApp/        MainActivity + Robolectric UI test
-└── iosApp/            Xcode project (SwiftUI wrapper)
+├── sdk/
+│   ├── voice-core/        VoiceSdk, CommandManifest, KeywordMatcher, IntentResolver, HttpLlmClient, Deeplinks
+│   ├── voice-android/     AndroidVoiceEngine, AndroidLinkOpener, VoiceSdkAndroid
+│   └── voice-ios/         IosVoiceEngine, IosLinkOpener, VoiceSdkIos
+└── samples/ojol-mitra/
+    ├── shared/src/
+    │   ├── commonMain/kotlin/id/ojolmitra/driver/
+    │   │   ├── core/      DriverController (router, voice handlers, context), DriverState, SimTiming
+    │   │   ├── voice/     OjolMitraVoice (manifest, config), VoicePanel, Speech
+    │   │   ├── sim/       OrderFactory, CustomerBot
+    │   │   ├── map/       CityMap
+    │   │   └── ui/        screens/, components/, theme/
+    │   ├── iosMain/       MainViewController
+    │   └── commonTest/    manifest, map and controller tests
+    ├── androidApp/        MainActivity + Robolectric UI test
+    └── iosApp/            Xcode project (SwiftUI wrapper)
 ```
 
 ## Third-party libraries and cost
 
-Every library is free and open source, so the license cost is US$0. The app needs no API keys, SDK accounts or paid services. Test-only libraries are not shipped in the app.
+Every library is free and open source, so the license cost is US$0. The app needs no API keys, SDK accounts or paid services, unless you turn on the optional LLM fallback, which your LLM provider bills per use (see [Security, privacy and cost](#security-privacy-and-cost)). Test-only libraries are not shipped in the app.
 
 | Library | Version | Used for | Scope | License | Cost |
 | --- | --- | --- | --- | --- | --- |
@@ -90,17 +169,20 @@ Every library is free and open source, so the license cost is US$0. The app need
 | Material Icons Extended | 1.7.3 | Icons (mic, motorbike, wallet, traffic light) | App | Apache 2.0 | Free |
 | kotlinx.coroutines (core, android) | 1.11.0 | Simulation timers, driver movement, StateFlow state | App | Apache 2.0 | Free |
 | AndroidX Activity Compose | 1.13.0 | Android entry point, microphone permission request | App (Android) | Apache 2.0 | Free |
+| kotlinx.serialization (JSON) | 1.13.0 | Reads the manifest and config, builds LLM requests | SDK | Apache 2.0 | Free |
+| Ktor client (core, Android engine, Darwin engine) | 3.6.1 | HTTP calls to the optional LLM | SDK | Apache 2.0 | Free |
 | Android Gradle Plugin | 8.13.2 | Android build | Build | Apache 2.0 | Free |
 | Gradle (wrapper) | 8.14.7 | Build tool | Build | Apache 2.0 | Free |
 | Android SDK (platform 36, build-tools 36) | 36 | Compile target | Build | Android SDK License Agreement | Free |
 | kotlin-test | 2.4.21 | Unit test assertions | Test | Apache 2.0 | Free |
 | kotlinx-coroutines-test | 1.11.0 | Virtual time in controller tests | Test | Apache 2.0 | Free |
+| Ktor client mock | 3.6.1 | Fake LLM server in SDK tests | Test | Apache 2.0 | Free |
 | JUnit 4 | 4.13.2 | Android test runner | Test | EPL 1.0 | Free |
 | Robolectric | 4.18 | Runs the Android framework on the JVM | Test | MIT | Free |
 | Roborazzi | 1.79.0 | Screenshots from Robolectric tests | Test | Apache 2.0 | Free |
 | AndroidX Compose UI Test | 1.11.2 | Clicks and assertions on the UI in tests | Test | Apache 2.0 | Free |
 
-Versions are pinned in `gradle/libs.versions.toml`. Compose Multiplatform stays on 1.11.1 because 1.12 needs compileSdk 37, which AGP 8.13 does not support.
+Versions are pinned in `gradle/libs.versions.toml`. Compose Multiplatform stays on 1.11.1 because 1.12 needs compileSdk 37, which AGP 8.13 does not support. For the same reason the SDK uses Ktor's Android engine (HttpURLConnection) instead of OkHttp, whose 5.x releases also need compileSdk 37.
 
 ## Platform services and running costs
 
@@ -114,43 +196,43 @@ Running the prototype costs nothing: speech recognition, text-to-speech and the 
 | `AVSpeechSynthesizer` | iOS | Assistant's spoken replies | Free | Runs on the device. |
 | City map | Both | Map, routes, traffic markers | US$0 | Drawn with Compose Canvas: no Google Maps or MapKit, no key, no per-load billing. |
 | Backend | None | Orders, customers, reports | US$0 | Everything is simulated on the device. |
+| LLM fallback (optional) | Both | Phrasing the manifest's keywords miss | Per token, billed by your provider | Off unless configured; see [How to turn on the LLM fallback](#turn-on-the-llm-fallback). |
 
 **Developer accounts (only for distribution):**
 
 - **Apple Developer Program: US$99 per year**, needed for TestFlight and the App Store ([source](https://developer.apple.com/programs/)). A free Apple Account can still run the app on your own iPhone as a Personal Team: up to 3 devices and 3 apps per device, with provisioning that expires after 7 days ([source](https://developer.apple.com/support/compare-memberships/)).
 - **Google Play Console: one-time registration fee of about US$25** (approximate; Google's fee page could not be opened). Not needed to install the APK directly on a phone.
 
-Optional upgrades, such as a wake-word engine or an LLM for free-form commands, are paid per usage or per seat. Check current pricing before adopting one.
+Optional upgrades, such as a wake-word engine, are paid per usage or per seat. Check current pricing before adopting one.
 
 ## Voice command flow
 
-Every voice command takes the same path: the platform engine turns speech into text, the shared parser turns text into a command, and the controller acts and answers aloud.
+Every voice command takes the same path: the platform engine turns speech into text, the SDK matches the text against the manifest commands that the current screen allows, and the app acts through a deeplink or a handler while the SDK answers aloud.
 
 ```mermaid
 sequenceDiagram
     participant D as Driver
     participant E as Speech engine
-    participant A as VoiceAssistant
-    participant P as Parser
+    participant S as VoiceSdk
     participant C as DriverController
-    C->>A: speak(order details), then listen
-    A->>E: speak()
+    C->>S: setContext(screen "order_offer", orderId)
+    C->>S: speak(order details, listenAfter = true)
+    S->>E: speak()
     E-->>D: reads the order aloud
-    E->>A: speaking done
-    A->>E: startListening()
+    E->>S: speaking done
+    S->>E: startListening()
     D->>E: “oke gas terima”
-    E->>A: final transcript
-    A->>C: heard text + listen context
-    C->>P: parse(text, context)
-    P-->>C: AcceptOrder
+    E->>S: final transcript
+    Note over S: keyword match: order.accept, score 1.0<br/>(the LLM is asked only below 0.8)
+    S->>C: deeplink ojolmitra://order/OM-1/accept
     Note over C: accept order, start trip
-    C->>A: reply text
-    A->>E: speak()
+    C-->>S: handled
+    S->>E: speak(manifest reply)
     E-->>D: “Order diterima…”
-    Note over D,C: Unclear answer or silence: the assistant asks again, at most twice.<br/>No answer within 25 s: the offer expires and the next order is scheduled.
+    Note over D,C: Unclear answer or silence: the SDK asks again, at most twice.<br/>No answer within 25 s: the offer expires and the next order is scheduled.
 ```
 
-The diagram shows the hands-free case; a tap on the mic skips the first four steps and starts at `startListening()`. The listen context tells the parser what is on screen: with an offer showing, "oke" or "ya" accept it, and after "Mau kirim pesan apa?" the whole sentence becomes the chat message.
+The diagram shows the hands-free case; a tap on the mic skips the first five steps and starts at `startListening()`. The context tells the SDK what is on screen: the manifest's `when` conditions allow "oke" or "ya" to accept only while an offer shows, and after "Mau kirim pesan apa?" the SDK takes the whole next sentence as the chat message.
 
 ## Order and trip flow
 
@@ -192,6 +274,7 @@ Commands are spoken in Indonesian. The microphone turns on when the driver taps 
 | Repeat details | "ulangi", "detail order" | Offer or trip | Reads the offer or trip status again |
 | Send chat | "chat saya sudah di depan", "kirim pesan ke penumpang bahwa saya kena macet", "bilang ke customer tunggu 5 menit", "balas oke siap" | Active trip | Message sent and marked "via suara" |
 | Chat in two steps | "kirim pesan" or "chat", then the message | Active trip | Assistant asks "Mau kirim pesan apa?" and listens |
+| Dictate chat | Tap the mic on the chat screen, then say the message | Chat screen open | The whole sentence is sent, even "terima kasih"; "batal" cancels |
 | Read / call / open chat | "baca pesan", "telepon penumpang", "buka chat" | Active trip | Reads last message, simulated call, opens chat |
 | Report traffic | "lapor macet parah di Jalan Sudirman", "ada kecelakaan di depan", "lapor banjir di Kemang Raya", "jalan ditutup dekat Stasiun Dukuh Atas", "info razia di Gatot Subroto" | Any time | Report with type, severity and location; marker on the map |
 | Ask what to report | "lapor" | Any time | Assistant asks "Mau lapor apa?" |
@@ -202,14 +285,16 @@ Commands are spoken in Indonesian. The microphone turns on when the driver taps 
 | Earnings | "pendapatan hari ini" | Any time | Reads today's earnings and wallet balance |
 | Help / cancel | "bantuan", "batal" | Any time | Lists commands for the current screen / stops |
 
-Parser rules worth knowing:
+Matching rules worth knowing (all set in the manifest, none in code):
 
-- Fillers at the start ("halo", "mitra", "tolong") and at the end ("dong", "ya", "pak") are ignored.
-- Slang maps to standard words: "udah sampe" means "sudah sampai", "gak" means "tidak".
-- "Terima kasih" never accepts an order, and a negation before an accept word ("tidak mau") rejects.
-- Location is the text after "di", "dekat", "depan" or "arah". No location, or "di depan" / "di sini", means the road the driver is on.
+- Fillers at the start or end ("halo", "mitra", "tolong", "dong", "ya", "pak") are ignored.
+- Slang maps to standard words through `aliases`: "udah sampe" means "sudah sampai", "gak" means "tidak".
+- A command runs only on the screens its `when` allows: "terima" with no offer showing, or "chat ..." with no trip, gets "perintah belum dikenali".
+- The phrase must explain at least 80% of the sentence, so "apa ya tadi" does not accept an order, while "oke gas terima" does.
+- "Terima kasih" never accepts an order (`notPhrases`), and "tidak mau" rejects.
+- Location is the text after "di", "dekat", "depan", "arah" and similar words. No location, or "di depan" / "di sini", means the road the driver is on.
 - Severity: "parah", "total" or "banget" mean Parah; "ringan" or "sedikit" mean Ringan; otherwise Sedang.
-- During an offer, an unclear answer or silence is re-prompted up to 2 times before the 25-second timer runs out.
+- After a question (a new order, "Mau lapor apa?"), an unclear answer or silence is re-prompted up to 2 times.
 
 ## How to
 
@@ -222,34 +307,50 @@ Parser rules worth knowing:
 ### Run on Android
 
 1. Clone this repo and open the folder in Android Studio. This also creates `local.properties` with your SDK path.
-2. Pick the `androidApp` run configuration and a device, then Run. From a terminal:
+2. Pick the `androidApp` run configuration (module `samples/ojol-mitra/androidApp`) and a device, then Run. From a terminal:
    ```bash
-   ./gradlew :androidApp:installDebug
+   ./gradlew :samples:ojol-mitra:androidApp:installDebug
    ```
 3. Allow the microphone when asked. On an emulator without Google speech services, tap the keyboard icon in the voice panel and type commands instead.
 
 ### Run on iOS
 
-1. Open the project once in Android Studio, or set `ANDROID_HOME`. The `shared` module also targets Android, so Gradle needs the SDK path even for iOS builds.
-2. Open `iosApp/iosApp.xcodeproj` in Xcode.
-3. Pick an iPhone simulator and Run. The "Compile Kotlin Framework" build phase runs `./gradlew :shared:embedAndSignAppleFrameworkForXcode` for you.
+1. Open the project once in Android Studio, or set `ANDROID_HOME`. The shared and SDK modules also target Android, so Gradle needs the SDK path even for iOS builds.
+2. Open `samples/ojol-mitra/iosApp/iosApp.xcodeproj` in Xcode.
+3. Pick an iPhone simulator and Run. The "Compile Kotlin Framework" build phase runs `./gradlew :samples:ojol-mitra:shared:embedAndSignAppleFrameworkForXcode` from the repository root for you.
 4. On a real iPhone, set Signing & Capabilities > Team (a free Personal Team works) and change the bundle id `id.ojolmitra.driver` if Xcode reports it is taken.
 5. Allow Microphone and Speech Recognition when asked.
 
 ### Run the tests
 
 ```bash
-./gradlew :shared:testDebugUnitTest            # 27 unit tests: parser, map routing, controller flow
-./gradlew :androidApp:testDebugUnitTest        # end-to-end UI journey on Robolectric, screenshots in androidApp/screenshots/
-./gradlew :shared:compileKotlinIosSimulatorArm64   # type-checks all iOS Kotlin code (also works on Linux and Windows)
+./gradlew :sdk:voice-core:testDebugUnitTest                         # 46 SDK unit tests
+./gradlew :samples:ojol-mitra:shared:testDebugUnitTest              # 32 app tests: manifest phrases, map routing, controller flow by voice
+./gradlew :samples:ojol-mitra:androidApp:testDebugUnitTest          # end-to-end UI journey on Robolectric, screenshots in samples/ojol-mitra/androidApp/screenshots/
+./gradlew :samples:ojol-mitra:shared:compileKotlinIosSimulatorArm64 # type-checks the app's and the SDK's iOS Kotlin code (also works on Linux and Windows)
 ```
+
+### Turn on the LLM fallback
+
+Without an LLM, only the manifest's phrases are understood. With one, the SDK sends what the keywords miss to your LLM, which picks one of the manifest's commands; the answer is validated before anything runs.
+
+- **Android sample:** add these keys to `local.properties` in the repository root (the file is git-ignored), then rebuild:
+  ```properties
+  voice.llm.baseUrl=https://api.anthropic.com
+  voice.llm.protocol=ANTHROPIC_MESSAGES
+  voice.llm.model=your-model-id
+  voice.llm.apiKey=your-api-key
+  ```
+  `protocol` can also be `OPENAI_COMPATIBLE` (any `/chat/completions` gateway) or `CUSTOM_JSON` (your own `/resolve` endpoint).
+- **iOS sample:** pass an `LlmConfig` to `OjolMitraVoice.config(llm = ...)` in `MainViewController.kt`.
+- A key built into an app can be extracted from it. For production, point `baseUrl` at your own proxy or use `tokenProvider`, as described in [Security, privacy and cost](#security-privacy-and-cost).
 
 ### Add a voice command
 
-1. Add a subtype to `VoiceCommand` in `shared/src/commonMain/kotlin/id/ojolmitra/driver/voice/VoiceCommand.kt`.
-2. In `VoiceCommandParser.kt`, add a keyword list and a `hasAny(...)` branch in `parse()`. Put slang spellings in `ALIASES`.
-3. Handle the new subtype in `DriverController.execute()` and return the spoken reply with `ok(...)` or `fail(...)`.
-4. Add phrases to `VoiceCommandParserTest.kt` and run the unit tests.
+1. Add an entry to `commands` in the manifest in `samples/ojol-mitra/shared/src/commonMain/kotlin/id/ojolmitra/driver/voice/OjolMitraVoice.kt`: `id`, `description` (the LLM reads it), `phrases` with `{slots}`, `when`, `params` and an `action`. Put slang spellings in `aliases`.
+2. For a `deeplink` action, handle the new path in `DriverController.route()` and return true when it worked. For a `handler` action, register it in `registerVoiceHandlers()` and return `HandlerResult.success(reply)` or `HandlerResult.failure(reply)`.
+3. If the command needs a value from the screen (an id, a name), add it in `syncVoiceContext()`.
+4. Add phrases to `OjolMitraManifestTest.kt` and run the unit tests.
 5. Optional: add an example chip to `COMMAND_GROUPS` in `VoiceScreen.kt` and to `voiceSuggestions()` in `DriverApp.kt`.
 
 ### Tune the simulation
@@ -260,8 +361,8 @@ Parser rules worth knowing:
 
 ### Change the language or swap the voice engine
 
-- The language tag is `VOICE_LANGUAGE = "id-ID"` in `voice/VoiceEngine.kt`. The parser's vocabulary is Indonesian, so another language also needs new keyword lists.
-- To use another speech service, implement the `VoiceEngine` interface and pass it to `App(voiceEngine)` from `MainActivity` (Android) or `MainViewController()` (iOS). Deliver callbacks on the main thread, and send exactly one final event per listening session: a result, an error, or an end without result.
+- The language tag is `OjolMitraVoice.LOCALE = "id-ID"`. Manifest phrases, aliases and fillers are keyed by language (`{"id-ID": [...], "en-US": [...]}`), so another language needs its own phrase lists; `VoiceMessages.ENGLISH` covers the SDK's built-in replies.
+- To use another speech service, implement the SDK's `VoiceEngine` interface and build the SDK with `VoiceSdk(config, manifest, engine, scope)` inside `App { scope -> ... }`. Deliver callbacks on the main thread, and send exactly one final event per listening session: a result, an error, or an end without result.
 
 ## Troubleshooting
 
@@ -269,28 +370,32 @@ Most first-run problems come from the iOS build calling Gradle, or from missing 
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Xcode build phase "Compile Kotlin Framework" fails with "SDK location not found" | The `shared` module also targets Android, so Gradle needs the Android SDK path | Open the project once in Android Studio, or `export ANDROID_HOME=~/Library/Android/sdk` |
+| Xcode build phase "Compile Kotlin Framework" fails with "SDK location not found" | The shared and SDK modules also target Android, so Gradle needs the Android SDK path | Open the project once in Android Studio, or `export ANDROID_HOME=~/Library/Android/sdk` |
 | Xcode build phase: "Unable to locate a Java Runtime" | Xcode's shell does not inherit `JAVA_HOME` | The script falls back to Android Studio's bundled JDK in `/Applications`; otherwise install JDK 17+ or set `JAVA_HOME` in the build phase |
 | Xcode: "Sandbox: deny file-read" during the Kotlin build phase | User script sandboxing is on | Keep `ENABLE_USER_SCRIPT_SANDBOXING = NO` (already set in the project) |
 | Link error: undefined symbol `SFSpeechRecognizer` or `AVSpeechSynthesizer` | Speech or AVFoundation not linked | Keep `-framework Speech -framework AVFoundation` in Other Linker Flags (already set) |
-| iOS app stops at launch with a message about `CADisableMinimumFrameDurationOnPhone` | Compose Multiplatform checks this Info.plist key | Keep the key in `iosApp/iosApp/Info.plist` if you replace that file |
+| iOS app stops at launch with a message about `CADisableMinimumFrameDurationOnPhone` | Compose Multiplatform checks this Info.plist key | Keep the key in `samples/ojol-mitra/iosApp/iosApp/Info.plist` if you replace that file |
 | Voice panel says speech recognition is not available | Emulator or phone has no speech service (common on Android emulators without Google apps) | Use a phone with the Google app, or type commands via the keyboard icon |
 | Mic button does nothing or a permission message appears | Microphone (and on iOS, Speech Recognition) permission was denied | Allow them in the system Settings for Ojol Mitra |
 | Assistant speaks with a foreign accent | No Indonesian TTS voice installed | Android: Settings > Text-to-speech > install Indonesian. iOS: Settings > Accessibility > Spoken Content > Voices > Indonesian |
-| Android build: dependency "requires compileSdk 37" | Compose Multiplatform was upgraded to 1.12+ | Stay on 1.11.x, or move to AGP 9 with compileSdk 37 |
+| Android build: dependency "requires compileSdk 37" | Compose Multiplatform was upgraded to 1.12+, or Ktor's OkHttp engine was added | Stay on Compose 1.11.x and Ktor's Android engine, or move to AGP 9 with compileSdk 37 |
+| Assistant answers "perintah tidak bisa dijalankan" | The deeplink's scheme is not in `dispatch.allowedSchemes`, the router returned false, or no handler is registered for the command | Add the scheme to the allowlist, return true from `onDeeplink` when handled, and register every handler named in the manifest |
+| Assistant answers "perintah belum dikenali" to a listed phrase | The command's `when` does not match the context, or the phrase covers less than 80% of the sentence | Check `syncVoiceContext()` and add the phrasing to the manifest |
 | No iOS simulator target on an Intel Mac | `iosX64` is not built | Use an Apple Silicon Mac or a real iPhone |
-| iOS stops listening too early or too late | Silence detection ends a request 1.3 s after the last new word (7 s with no speech) | Tune `scheduleEndOfSpeech` in `IosVoiceEngine.kt` |
+| iOS stops listening too early or too late | Silence detection ends a request 1.3 s after the last new word (7 s with no speech) | Tune `dialog.endOfSpeechMs` and `dialog.listenTimeoutMs` in `VoiceConfig` |
 
 ## Verification status and limitations
 
-The Android build and all shared logic are tested. The iOS Kotlin code compiles, but the iOS app has not yet been linked or launched, because that needs a Mac with Xcode.
+The SDK, the Android build and all shared logic are tested. The iOS Kotlin code compiles, but the iOS app and the XCFramework have not yet been linked or launched, because that needs a Mac with Xcode.
 
 | Check | Result | How it was checked |
 | --- | --- | --- |
-| Shared unit tests (27) | Pass | `./gradlew :shared:testDebugUnitTest` |
-| Android debug APK | Pass | `./gradlew :androidApp:assembleDebug` (about 18 MB) |
-| Android end-to-end UI journey | Pass, 3 runs in a row | Robolectric + Roborazzi: online, offer, accept by voice, chat by voice, traffic report by voice and by form, trip stages, completion, other tabs |
-| iOS Kotlin compile (iosArm64, iosSimulatorArm64, iOS tests) | Pass | Kotlin 2.4 compiler, including the Speech and AVFAudio calls |
+| SDK unit tests (46) | Pass | `./gradlew :sdk:voice-core:testDebugUnitTest` |
+| App unit tests (32) | Pass | `./gradlew :samples:ojol-mitra:shared:testDebugUnitTest` |
+| Android debug APK | Pass | `./gradlew :samples:ojol-mitra:androidApp:assembleDebug` (about 20 MB) |
+| Android end-to-end UI journey | Pass | Robolectric + Roborazzi, through the SDK: online, offer, accept by voice, chat by voice, traffic report by voice and by form, trip stages, completion, other tabs |
+| iOS Kotlin compile (SDK and app; iosArm64, iosSimulatorArm64) | Pass | Kotlin 2.4 compiler, including the Speech, AVFAudio and UIKit calls |
+| LLM fallback against a real provider | Not verified | All three protocols are tested against a mock server; no real key was used |
 | Xcode project file | Structure valid | Parsed with a pbxproj parser; all references resolve. Not opened in Xcode |
 | iOS link, launch and speech on device | Not verified | Needs a Mac with Xcode |
 | Real microphone recognition on Android | Not verified | Tests inject transcripts; no emulator was available |
@@ -300,14 +405,16 @@ Limitations of the prototype:
 - Orders, customers, chat replies and other drivers' reports are simulated on the device. There is no backend, login or payment.
 - The map is a fictional street grid, not GPS or real roads. Calls and navigation are simulated.
 - There is no wake word. Google's docs say `SpeechRecognizer` is not meant for continuous listening, so a wake word needs a dedicated engine.
-- The parser is rule-based: phrasing outside its vocabulary gets "perintah belum dikenali" (command not recognized).
+- Without an LLM configured, phrasing outside the manifest gets "perintah belum dikenali" (command not recognized).
 - State is not saved: earnings and history reset when the app restarts.
 
 Suggested next steps: run on a Mac and real phones; add a wake word; switch to on-device recognition (Android API 31+, iOS on-device mode) for offline use; replace the simulation with real maps and a backend.
 
 ## Voice Command SDK plan
 
-The Voice Command SDK is a Kotlin Multiplatform library that any Android or iOS app can embed to turn speech into actions. It listens, matches the words to commands the app registered, asks an LLM you configure (URL + API key) when keywords are not enough, and opens the matching deeplink or calls the app's handler. The Ojol Mitra prototype in this repo becomes its first consumer.
+The Voice Command SDK is a Kotlin Multiplatform library that any Android or iOS app can embed to turn speech into actions. It listens, matches the words to commands the app registered, asks an LLM you configure (URL + API key) when keywords are not enough, and opens the matching deeplink or calls the app's handler. The Ojol Mitra prototype in this repo is its first consumer.
+
+> **Status:** version 1 is implemented in `sdk/`; see [Voice Command SDK](#voice-command-sdk) above. This section is the design it follows, updated where the build differed.
 
 ### Goals and non-goals
 
@@ -363,7 +470,7 @@ flowchart LR
     D --> R
 ```
 
-The Resolver is the new part. The speech engine, voice session and validator already exist in the prototype as `VoiceEngine`, `VoiceAssistant` and the controller's checks, so extracting them is mostly moving code.
+The speech engines and the voice session came out of the prototype; the resolver, the LLM client and the validator are new.
 
 ### Configuration
 
@@ -379,7 +486,7 @@ An app configures the SDK with one `VoiceConfig`, built in code or loaded from J
 | `llm.model` | string | not set | Model id sent in each request |
 | `llm.timeoutMs` | int | 3000 | After this, fall back to the keyword result or ask the user to repeat |
 | `llm.extraHeaders` | map | empty | Extra headers, e.g. an API version |
-| `locale` | BCP 47 tag | device locale | Speech and matching language, e.g. `id-ID` |
+| `locale` | BCP 47 tag | `id-ID` | Speech and matching language, e.g. `id-ID` |
 | `resolution.mode` | enum | `KEYWORD_FIRST` | `KEYWORD_FIRST`, `LLM_FIRST`, `KEYWORD_ONLY` or `LLM_ONLY` |
 | `resolution.keywordMinScore` | 0 to 1 | 0.8 | Keyword matches below this go to the LLM |
 | `resolution.llmMinConfidence` | 0 to 1 | 0.6 | LLM answers below this make the assistant ask again |
@@ -419,15 +526,15 @@ The manifest maps spoken phrases to a function, the context where it is allowed,
 | `phrases` | Yes | Per-language trigger phrases; `{slot}` marks a parameter, e.g. `"chat {message}"` |
 | `notPhrases` | No | Phrases that must never trigger it, e.g. "terima kasih" for `order.accept` |
 | `when` | No | Context conditions, e.g. `{"screen": "order_offer"}`; the command is ignored elsewhere |
-| `params` | No | Parameters: `name`, `type` (`text`, `enum`, `number`, `date`), `from` (`speech`, `context` or `both`), `required`, enum `values` with synonyms, `default`, and `ask` (question when missing) |
+| `params` | No | Parameters: `name`, `type` (`text`, `enum`, `number`, `date`), `from` (`speech`, `context` or `both`), `required`, enum `values` with synonyms, `default`, `ask` (question when missing), and `after` (words that start a text value outside the phrase, e.g. `["di", "dekat"]` for a place) |
 | `action` | Yes | `{"type": "deeplink", "url": "app://...{param}"}` or `{"type": "handler", "name": "..."}` |
 | `confirm` | No | Spoken confirmation before acting, for destructive commands |
 | `reply` | No | Spoken reply template; a handler can override it |
 | `priority` | No | Tie-breaker when two commands match equally |
 
-Top-level keys: `version`, `app`, `defaultLocale`, `aliases` (slang per language, e.g. "udah" to "sudah") and `fillers` (words to ignore, e.g. "tolong", "dong").
+Top-level keys: `version`, `app`, `defaultLocale`, `aliases` (slang per language, e.g. "udah" to "sudah"), `fillers` (words to ignore, e.g. "tolong", "dong") and `suffixes` (endings to strip from known words, e.g. "-nya").
 
-Example for Ojol Mitra (three of its commands):
+Example for Ojol Mitra (three of its commands; the full manifest is in `OjolMitraVoice.kt`):
 
 ```json
 {
@@ -481,11 +588,12 @@ Example for Ojol Mitra (three of its commands):
 
 Keyword matching rules, generalized from the prototype's parser:
 
-1. Normalize the transcript: lowercase, drop punctuation, apply `aliases`, drop leading and trailing `fillers`.
+1. Normalize the transcript: lowercase, drop punctuation, apply `aliases`, strip `suffixes` from known words, drop leading and trailing `fillers`.
 2. Drop commands whose `when` does not hold, and any command whose `notPhrases` match.
-3. Match `phrases` in order of specificity. Literal words must appear in order; a `text` slot takes the remaining words, and an `enum` slot must hit one of its synonyms.
-4. Score: 1.0 for an exact phrase, 0.9 when all literal words match around slots, 0.8 when one word of five or more letters is one typo away. Ties go to `priority`, then the longer match.
-5. Fill `from: context` parameters from the current context, apply `default`s, and ask for any missing `required` parameter with its `ask` prompt.
+3. Match `phrases`: literal words must appear in order; a trailing `text` slot takes the remaining words, a middle one the fewest that let the rest match, and an `enum` slot must hit one of its synonyms. A trailing slot may stay empty, so "chat" alone leads to "Mau kirim pesan apa?".
+4. Extract the other parameters: enum synonyms anywhere in the sentence, and `text` values after their `after` words, up to the next enum synonym.
+5. Score how much of the sentence the match explains: 1.0 × coverage for word-only phrases, 0.9 × coverage when slots or extracted values are involved, minus 0.1 per one-letter typo (words of five or more letters). Other word-only phrases of the same command, and more synonyms of a matched enum value, count as explained ("gas, terima", "macet padat"). Ties go to `priority`, then the phrase with more literal words.
+6. Fill `from: context` parameters from the current context, apply `default`s, and ask for any missing `required` parameter with its `ask` prompt.
 
 ### Intent resolution flow
 
@@ -535,7 +643,7 @@ short question in {locale}.
 
 ```json
 {
-  "model": "claude-opus-5-5",
+  "model": "<model id>",
   "max_tokens": 256,
   "output_config": { "effort": "low" },
   "system": "<system prompt above>",
@@ -626,36 +734,37 @@ The app creates one `VoiceSdk` instance, gives it a config and a manifest, wires
 
 | Call | Purpose |
 | --- | --- |
-| `VoiceSdk.create(config, manifest)` | Build the instance (Android also takes an app `Context`) |
-| `updateManifest(json)` | Swap commands at runtime, e.g. after a remote config fetch |
+| `VoiceSdkAndroid.create(context, config, manifest)`, `VoiceSdkIos.create(config, manifest)` | Build the instance with the platform's speech engine; `VoiceSdk(config, manifest, engine, scope)` takes any engine |
+| `updateManifest(manifest)` | Swap commands at runtime, e.g. after a remote config fetch |
 | `setContext(context)` | Current screen and values |
-| `startListening()`, `stopListening()`, `cancel()` | Mic button behaviour; `stopListening` asks for the final result now |
-| `speak(text, listenAfter)` | Say something, then optionally listen (hands-free prompts) |
+| `startListening()`, `stopListening()`, `cancelListening()`, `cancel()` | Mic button behaviour; `stopListening` asks for the final result now, `cancel` also drops questions and queued speech |
+| `speak(text, listenAfter, interrupt)` | Say something, then optionally listen (hands-free prompts) |
 | `submitText(text)` | Resolve typed text as if spoken: emulators, accessibility, tests |
-| `onDeeplink(callback)` | Route allowed in-app deeplinks with the app's router |
-| `registerHandler(name, handler)` | Implement `handler` actions; returns success or failure and an optional reply |
-| `events` | `Flow<VoiceEvent>` in Kotlin, a listener in Swift |
+| `onDeeplink(callback)` | Route allowed in-app deeplinks with the app's router; return true when handled |
+| `registerHandler(name, handler)` | Implement `handler` actions; returns success or failure, an optional reply, and whether to listen again |
+| `state`, `events`, `addEventListener(listener)` | `StateFlow<VoiceState>`, `Flow<VoiceEvent>`, and synchronous callbacks (easiest from Swift) |
+| `close()` | Stop everything and release the speech engine |
 
-Events: `StateChanged` (idle, listening, processing, speaking), `SoundLevel`, `Partial`, `Final`, `Resolved` (command id, parameters, source `KEYWORD` or `LLM`, confidence), `NeedsInput` (parameter and question), `Action` (command id and outcome) and `Error`. Error codes: `PERMISSION_DENIED`, `STT_UNAVAILABLE`, `NO_MATCH`, `LLM_TIMEOUT`, `LLM_HTTP_ERROR`, `LLM_INVALID_RESPONSE`, `DEEPLINK_BLOCKED`, `HANDLER_FAILED`.
+Events: `StateChanged` (idle, listening, processing, speaking), `SoundLevel`, `Partial`, `Final`, `Resolved` (command id, parameters, source `KEYWORD` or `LLM`, confidence), `NeedsInput` (parameter and question), `NoMatch`, `Cancelled`, `Action` (command id and outcome) and `Error`. Error codes: `PERMISSION_DENIED`, `STT_UNAVAILABLE`, `NO_MATCH`, `LLM_TIMEOUT`, `LLM_HTTP_ERROR`, `LLM_INVALID_RESPONSE`, `DEEPLINK_BLOCKED`, `HANDLER_FAILED`.
 
 Android (Kotlin):
 
 ```kotlin
-val voice = VoiceSdk.create(
+val voice = VoiceSdkAndroid.create(
     context = applicationContext,
     config = VoiceConfig(
         locale = "id-ID",
         llm = LlmConfig(
             baseUrl = "https://llm-proxy.example.com",
             protocol = LlmProtocol.ANTHROPIC_MESSAGES,
-            model = "claude-opus-5-5",
+            model = "your-model-id",
             tokenProvider = { authApi.fetchVoiceToken() },
         ),
         dispatch = DispatchConfig(allowedSchemes = listOf("ojolmitra")),
     ),
     manifest = CommandManifest.fromJson(assets.open("voice-commands.json").bufferedReader().readText()),
 )
-voice.onDeeplink { uri -> navController.navigate(uri) }
+voice.onDeeplink { uri -> navController.navigate(uri); true }
 voice.registerHandler("reportTraffic") { call ->
     trafficRepository.report(call.param("type"), call.param("severity"), call.param("location"))
     HandlerResult.success()
@@ -663,15 +772,13 @@ voice.registerHandler("reportTraffic") { call ->
 micButton.setOnClickListener { voice.startListening() }
 ```
 
-iOS (Swift, proposed shape of the exported framework):
+iOS (Swift). Not yet compiled against Swift, because that needs a Mac; the names follow Kotlin/Native's Objective-C export:
 
 ```swift
-let voice = VoiceSdk.companion.create(config: config, manifest: manifest)
-voice.onDeeplink { url in router.open(url) }
-voice.registerHandler(name: "reportTraffic") { call in
-    trafficRepository.report(call.param("type"), call.param("location"))
-    return HandlerResult.companion.success()
-}
+let voice = VoiceSdkIos.shared.create(config: config, manifest: manifest)
+voice.onDeeplink(handler: router)                                  // router adopts the DeeplinkHandler protocol
+voice.registerHandler(name: "reportTraffic", handler: trafficHandler)
+voice.addEventListener(listener: panel)                            // panel adopts VoiceEventListener
 voice.startListening()
 ```
 
@@ -684,7 +791,7 @@ The provider API key must never ship inside the app, and the LLM is the only par
 **Security**
 
 - **Keys:** a key bundled in an APK or IPA can be extracted. Production apps either point `baseUrl` at their own proxy, which holds the provider key and rate-limits per user, or use `tokenProvider` to fetch a short-lived token from their backend. `apiKey` is for internal builds only. Keys stay in memory and are never logged.
-- **Transport:** `baseUrl` must be HTTPS. Plain HTTP is refused, except `localhost` in debug builds.
+- **Transport:** `baseUrl` must be HTTPS. Plain HTTP is refused, except `localhost`, `127.0.0.1` and the Android emulator's host `10.0.2.2`, for local development.
 - **Constrained output:** the LLM can only pick a registered tool, its arguments are schema-validated, and context-only parameters (ids) never come from the LLM. It cannot produce a URL of its own.
 - **Prompt injection:** the transcript is sent as user data. Whatever it says, the worst outcome is a wrong but registered command, which the allowlist and `confirm` contain.
 
@@ -717,15 +824,15 @@ The SDK ships as three modules from this repository, and the Ojol Mitra prototyp
 | `voice-android` | Android speech engine, `Intent` dispatch, Android API facade | AAR on Maven |
 | `voice-ios` | iOS speech engine (Kotlin/Native), `UIApplication` dispatch, Swift-friendly facade | XCFramework via Swift Package Manager (binary target), optional CocoaPods |
 
-New dependencies: kotlinx.serialization for JSON and Ktor client (OkHttp engine on Android, Darwin engine on iOS), both Apache 2.0 and free. Supported platforms: Android 8.0+ (API 26), iOS 15+, Kotlin 2.4+. Versions follow semver, and the manifest's own `version` field lets an older SDK reject a manifest it cannot read.
+New dependencies: kotlinx.serialization for JSON and Ktor client (Android engine on Android, Darwin engine on iOS), both Apache 2.0 and free. Supported platforms: Android 8.0+ (API 26), iOS 15+, Kotlin 2.4+. Versions follow semver, and the manifest's own `version` field lets an older SDK reject a manifest it cannot read.
 
-Proposed repository layout: `sdk/voice-core`, `sdk/voice-android`, `sdk/voice-ios`, and `samples/ojol-mitra` (today's prototype, moved).
+Repository layout: `sdk/voice-core`, `sdk/voice-android`, `sdk/voice-ios`, and `samples/ojol-mitra` (the prototype, moved).
 
 Phases:
 
-1. **Extract:** move `VoiceEngine`, `VoiceAssistant` and both platform engines out of the prototype. Replace the hard-coded parser with the manifest and keyword matcher; the prototype's commands become `ojolmitra-voice.json`, and its 27 parser tests become manifest tests.
-2. **LLM resolver:** add the three protocols, validation, confidence, `tokenProvider` and a sample proxy, with contract tests against a mock LLM server.
-3. **Dispatch and release:** add context, deeplinks, allowlist, confirmation and handlers, then publish 1.0 to Maven and Swift Package Manager.
+1. **Extract (done):** `VoiceEngine`, the voice session and both platform engines moved out of the prototype. The hard-coded parser became the manifest in `OjolMitraVoice.kt` plus the SDK's keyword matcher, and its parser tests became manifest tests.
+2. **LLM resolver (done, except a sample proxy):** the three protocols, validation, confidence and `tokenProvider`, with contract tests against a mock LLM server.
+3. **Dispatch and release (dispatch done, release open):** context, deeplinks, allowlist, confirmation and handlers are in. Still to do: publish 1.0 to Maven and Swift Package Manager.
 4. **Later:** wake word, on-device recognition, more languages, and an optional Compose UI module based on the prototype's voice panel.
 
 ### Open questions

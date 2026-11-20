@@ -8,9 +8,9 @@ local.properties
 captures/
 .externalNativeBuild/
 .cxx/
-iosApp/build/
+**/iosApp/build/
 xcuserdata/
 *.xcuserstate
 DerivedData/
-androidApp/screenshots/
+**/androidApp/screenshots/
 dist/
