@@ -8,6 +8,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
@@ -183,7 +184,7 @@ public class HttpLlmClient(
                 (extra + config.extraHeaders).forEach { (k, v) -> header(k, v) }
                 setBody(body.toString())
             }
-        } catch (e: TimeoutCancellationException) {
+        } catch (e: CancellationException) { // includes TimeoutCancellationException
             throw e
         } catch (e: Exception) {
             throw LlmException(VoiceErrorCode.LLM_HTTP_ERROR, "LLM request failed: ${e.message}", e)
