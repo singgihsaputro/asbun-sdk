@@ -313,6 +313,10 @@ Matching rules worth knowing (all set in the manifest, none in code):
    ```
 3. Allow the microphone when asked. On an emulator without Google speech services, tap the keyboard icon in the voice panel and type commands instead.
 
+### Get the APK from CI
+
+Every push that changes code runs the [Android APK workflow](.github/workflows/android-apk.yml) on GitHub Actions, which builds the debug APK. Open the run in the repository's **Actions** tab and download `ojol-mitra-debug-<commit>.apk` under **Artifacts**. Artifacts are kept for 14 days, and the workflow can also be started by hand with **Run workflow**.
+
 ### Run on iOS
 
 1. Open the project once in Android Studio, or set `ANDROID_HOME`. The shared and SDK modules also target Android, so Gradle needs the SDK path even for iOS builds.
