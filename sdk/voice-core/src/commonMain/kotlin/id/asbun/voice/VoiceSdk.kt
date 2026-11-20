@@ -3,6 +3,7 @@ package id.asbun.voice
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -150,6 +151,7 @@ public class VoiceSdk(
     private var pendingInput: Resolution.NeedsInput? = null
     private var pendingConfirm: Resolution.Matched? = null
     private var lastAction: Triple<String, String, Long>? = null
+    private var processJob: Job? = null
 
     private val listener = object : VoiceEngineListener {
         override fun onListeningStarted() {
@@ -214,6 +216,7 @@ public class VoiceSdk(
 
     /** Swap commands at runtime, e.g. after a remote config fetch. Clears any open question. */
     public fun updateManifest(manifest: CommandManifest) {
+        processJob?.cancel()
         this.manifest = manifest
         resolver = IntentResolver(manifest, config, llm)
         pendingInput = null
@@ -249,6 +252,7 @@ public class VoiceSdk(
 
     /** Mic button: listen for one command (an open question is still answered). */
     public fun startListening() {
+        processJob?.cancel()
         reprompts = 0
         listen(prompted = false)
     }
@@ -270,6 +274,7 @@ public class VoiceSdk(
 
     /** Stop everything: speech, listening, queued replies and open questions. */
     public fun cancel() {
+        processJob?.cancel()
         queue.clear()
         listenAfterSpeech = false
         currentUtteranceId = null
@@ -391,11 +396,12 @@ public class VoiceSdk(
     }
 
     private fun process(alternatives: List<String>, prompted: Boolean) {
+        processJob?.cancel() // a new utterance replaces one still being resolved
         val heard = alternatives.first()
         update { it.copy(phase = VoicePhase.PROCESSING, partialText = heard, lastHeard = heard, level = 0f, error = null) }
         emit(VoiceEvent.Final(alternatives))
         // UNDISPATCHED: keyword-only flows finish synchronously; an LLM call resumes later.
-        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+        processJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             val confirm = pendingConfirm
             val input = pendingInput
             when {
