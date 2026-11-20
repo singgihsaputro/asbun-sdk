@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import id.asbun.voice.Claude
 import id.asbun.voice.LlmConfig
 import id.asbun.voice.LlmProtocol
 import id.asbun.voice.android.VoiceSdkAndroid
@@ -36,10 +37,17 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Optional LLM fallback, from `local.properties` (see the README). Demo only: a key in
-     * the APK can be extracted, so production apps use a backend proxy or `tokenProvider`.
+     * Optional LLM for what the keywords miss, from `local.properties` (see the README): Claude
+     * when `voice.claude.apiKey` is set, otherwise any provider from `voice.llm.*`. Demo only: a
+     * key in the APK can be extracted, so production apps use a backend proxy or `tokenProvider`.
      */
     private fun llmFromBuildConfig(): LlmConfig? {
+        if (BuildConfig.VOICE_CLAUDE_API_KEY.isNotBlank()) {
+            return Claude.config(
+                apiKey = BuildConfig.VOICE_CLAUDE_API_KEY,
+                model = BuildConfig.VOICE_CLAUDE_MODEL.ifBlank { Claude.DEFAULT_MODEL },
+            )
+        }
         if (BuildConfig.VOICE_LLM_BASE_URL.isBlank()) return null
         return LlmConfig(
             baseUrl = BuildConfig.VOICE_LLM_BASE_URL,

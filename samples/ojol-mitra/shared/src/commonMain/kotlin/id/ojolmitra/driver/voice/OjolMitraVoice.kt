@@ -31,8 +31,7 @@ object OjolMitraVoice {
 
     /**
      * Pass an [LlmConfig] to let an LLM resolve what the keywords miss, e.g.
-     * `LlmConfig(baseUrl = "https://api.anthropic.com", model = "...", protocol = LlmProtocol.ANTHROPIC_MESSAGES, apiKey = ...)`.
-     * Without one the app works fully offline on keywords.
+     * `Claude.config(apiKey = ...)` for Claude. Without one the app works fully offline on keywords.
      */
     fun config(llm: LlmConfig? = null): VoiceConfig = VoiceConfig(
         locale = LOCALE,

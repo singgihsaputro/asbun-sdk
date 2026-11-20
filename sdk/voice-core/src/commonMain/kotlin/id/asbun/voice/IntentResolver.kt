@@ -124,7 +124,7 @@ public class IntentResolver(
                     locale = config.locale,
                     context = llmContext,
                     tools = tools,
-                    systemPrompt = LlmTools.systemPrompt(config.locale, llmContext),
+                    systemPrompt = LlmTools.systemPrompt(config.locale),
                 ),
             )
         } catch (e: CancellationException) {
