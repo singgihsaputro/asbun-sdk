@@ -105,7 +105,7 @@ public data class CommandManifest(
     public companion object {
         public const val SUPPORTED_VERSION: Int = 1
         private val ID_PATTERN = Regex("[A-Za-z0-9._-]+")
-        private val SLOT_PATTERN = Regex("\\{([A-Za-z0-9_]+)}")
+        private val SLOT_PATTERN = Regex("\\{([A-Za-z0-9_]+)\\}")
 
         public fun fromJson(json: String): CommandManifest {
             val root = try {

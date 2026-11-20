@@ -349,7 +349,7 @@ public class KeywordMatcher(
     }
 
     private companion object {
-        val SLOT = Regex("\\{([A-Za-z0-9_]+)}[.,!?]*")
+        val SLOT = Regex("\\{([A-Za-z0-9_]+)\\}[.,!?]*")
 
         fun plainWords(text: String): List<String> =
             text.split(Regex("\\s+")).filterNot { SLOT.matches(it) }.map { w -> w.lowercase().filter { it.isLetterOrDigit() } }.filter { it.isNotEmpty() }
