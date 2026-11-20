@@ -10,7 +10,7 @@ public data class ParsedLink(
 
 /** Template filling, allowlist checks and parsing for deeplinks. */
 public object Deeplinks {
-    private val PLACEHOLDER = Regex("\\{(context\\.)?([A-Za-z0-9_]+)}")
+    private val PLACEHOLDER = Regex("\\{(context\\.)?([A-Za-z0-9_]+)\\}")
 
     /**
      * Replaces `{param}` and `{context.key}` in a deeplink template. Values are percent-encoded
