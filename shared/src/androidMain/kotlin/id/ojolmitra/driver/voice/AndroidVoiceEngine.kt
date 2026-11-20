@@ -1,0 +1,225 @@
+package id.ojolmitra.driver.voice
+
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import java.util.Locale
+
+/**
+ * Implementasi Android: [SpeechRecognizer] untuk speech-to-text dan [TextToSpeech] untuk suara asisten.
+ *
+ * @param requestPermission dipanggil bila izin RECORD_AUDIO belum diberikan (Activity yang meminta izin).
+ */
+class AndroidVoiceEngine(
+    context: Context,
+    private val requestPermission: () -> Unit = {},
+) : VoiceEngine {
+
+    private val appContext = context.applicationContext
+    private val main = Handler(Looper.getMainLooper())
+
+    override var listener: VoiceEngineListener? = null
+
+    override val isRecognitionAvailable: Boolean
+        get() = SpeechRecognizer.isRecognitionAvailable(appContext)
+
+    private var recognizer: SpeechRecognizer? = null
+    /** Sesi mendengarkan aktif; event di luar sesi diabaikan (lihat kontrak [VoiceEngineListener]). */
+    private var sessionActive = false
+    private var lastPartial: String = ""
+
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private val pendingSpeech = mutableListOf<Pair<String, String>>()
+
+    init {
+        tts = TextToSpeech(appContext) { status ->
+            main.post {
+                ttsReady = status == TextToSpeech.SUCCESS
+                if (ttsReady) configureTts()
+                val pending = pendingSpeech.toList()
+                pendingSpeech.clear()
+                pending.forEach { (text, id) -> speak(text, id) }
+            }
+        }
+    }
+
+    private fun configureTts() {
+        val engine = tts ?: return
+        val indonesian = Locale.forLanguageTag(VOICE_LANGUAGE)
+        val result = engine.setLanguage(indonesian)
+        if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+            engine.setLanguage(Locale.getDefault())
+        }
+        engine.setSpeechRate(1.05f)
+        engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {
+                main.post { listener?.onSpeakingStarted(utteranceId.orEmpty()) }
+            }
+
+            override fun onDone(utteranceId: String?) {
+                main.post { listener?.onSpeakingDone(utteranceId.orEmpty()) }
+            }
+
+            override fun onStop(utteranceId: String?, interrupted: Boolean) {
+                main.post { listener?.onSpeakingDone(utteranceId.orEmpty()) }
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun onError(utteranceId: String?) {
+                main.post { listener?.onSpeakingDone(utteranceId.orEmpty()) }
+            }
+
+            override fun onError(utteranceId: String?, errorCode: Int) {
+                main.post { listener?.onSpeakingDone(utteranceId.orEmpty()) }
+            }
+        })
+    }
+
+    // ------------------------------------------------------------------ STT
+
+    override fun startListening(languageTag: String) {
+        main.post {
+            if (appContext.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                requestPermission()
+                listener?.onListeningError(VoiceError.PERMISSION_DENIED)
+                return@post
+            }
+            if (!isRecognitionAvailable) {
+                listener?.onListeningError(VoiceError.NOT_AVAILABLE)
+                return@post
+            }
+            tts?.stop()
+            val r = recognizer ?: SpeechRecognizer.createSpeechRecognizer(appContext).also {
+                it.setRecognitionListener(recognitionListener)
+                recognizer = it
+            }
+            r.cancel()
+            sessionActive = true
+            lastPartial = ""
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, languageTag)
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+                putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, appContext.packageName)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_200L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1_000L)
+            }
+            r.startListening(intent)
+        }
+    }
+
+    override fun stopListening() {
+        main.post { if (sessionActive) recognizer?.stopListening() }
+    }
+
+    override fun cancelListening() {
+        main.post {
+            sessionActive = false
+            recognizer?.cancel()
+        }
+    }
+
+    private val recognitionListener = object : RecognitionListener {
+        override fun onReadyForSpeech(params: Bundle?) {
+            if (sessionActive) listener?.onListeningStarted()
+        }
+
+        override fun onBeginningOfSpeech() {}
+
+        override fun onRmsChanged(rmsdB: Float) {
+            // rmsdB kira-kira -2..10 dB -> 0..1
+            if (sessionActive) listener?.onSoundLevel(((rmsdB + 2f) / 12f).coerceIn(0f, 1f))
+        }
+
+        override fun onBufferReceived(buffer: ByteArray?) {}
+        override fun onEndOfSpeech() {}
+
+        override fun onError(error: Int) {
+            if (!sessionActive) return
+            sessionActive = false
+            // Kadang hasil parsial sudah benar tapi engine timeout -> pakai parsial.
+            if ((error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) && lastPartial.isNotBlank()) {
+                listener?.onFinalResult(listOf(lastPartial))
+                return
+            }
+            listener?.onListeningError(mapError(error))
+        }
+
+        override fun onResults(results: Bundle?) {
+            if (!sessionActive) return
+            sessionActive = false
+            val texts = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty().filter { it.isNotBlank() }
+            when {
+                texts.isNotEmpty() -> listener?.onFinalResult(texts)
+                lastPartial.isNotBlank() -> listener?.onFinalResult(listOf(lastPartial))
+                else -> listener?.onListeningError(VoiceError.NO_MATCH)
+            }
+        }
+
+        override fun onPartialResults(partialResults: Bundle?) {
+            if (!sessionActive) return
+            val text = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+            if (!text.isNullOrBlank()) {
+                lastPartial = text
+                listener?.onPartialResult(text)
+            }
+        }
+
+        override fun onEvent(eventType: Int, params: Bundle?) {}
+    }
+
+    private fun mapError(code: Int): VoiceError = when (code) {
+        SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> VoiceError.NO_MATCH
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> VoiceError.PERMISSION_DENIED
+        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
+        SpeechRecognizer.ERROR_SERVER, SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> VoiceError.NETWORK
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY, SpeechRecognizer.ERROR_TOO_MANY_REQUESTS -> VoiceError.BUSY
+        SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED, SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> VoiceError.NOT_AVAILABLE
+        else -> VoiceError.UNKNOWN
+    }
+
+    // ------------------------------------------------------------------ TTS
+
+    override fun speak(text: String, utteranceId: String, languageTag: String) {
+        main.post {
+            val engine = tts
+            when {
+                engine == null -> listener?.onSpeakingDone(utteranceId)
+                !ttsReady -> pendingSpeech += text to utteranceId
+                else -> {
+                    val result = engine.speak(text, TextToSpeech.QUEUE_FLUSH, Bundle(), utteranceId)
+                    if (result != TextToSpeech.SUCCESS) listener?.onSpeakingDone(utteranceId)
+                }
+            }
+        }
+    }
+
+    override fun stopSpeaking() {
+        main.post {
+            pendingSpeech.clear()
+            tts?.stop()
+        }
+    }
+
+    override fun shutdown() {
+        main.post {
+            sessionActive = false
+            recognizer?.destroy()
+            recognizer = null
+            tts?.shutdown()
+            tts = null
+        }
+    }
+}

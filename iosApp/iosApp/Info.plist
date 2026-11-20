@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Mikrofon dipakai untuk perintah suara: terima order, chat ke customer, dan lapor lalu lintas tanpa sentuh layar.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Pengenalan suara mengubah ucapanmu menjadi perintah di aplikasi Ojol Mitra.</string>
+</dict>
+</plist>
