@@ -155,7 +155,7 @@ fun DriverApp(controller: DriverController) {
         ) {
             VoiceAssistantPanel(
                 voice = voice,
-                suggestions = voiceSuggestions(state),
+                suggestions = voiceSuggestions(state, wakeReady = state.wakeWord && sdkVoice.wakeUnavailable == null),
                 onMic = controller::onMicPressed,
                 onClose = controller::closeVoicePanel,
                 onSubmit = controller::submitTypedCommand,
@@ -219,7 +219,7 @@ private fun HomeTab.icon(): ImageVector = when (this) {
 }
 
 /** Contoh perintah yang relevan dengan kondisi saat ini. */
-private fun voiceSuggestions(state: DriverUiState): List<String> {
+private fun voiceSuggestions(state: DriverUiState, wakeReady: Boolean): List<String> {
     val trip = state.trip
     return when {
         state.offer != null -> listOf("Terima", "Tolak", "Ulangi")
@@ -230,6 +230,6 @@ private fun voiceSuggestions(state: DriverUiState): List<String> {
             TripStage.AT_DROPOFF -> listOf("Selesai", "Chat terima kasih sudah order")
         }
         !state.isOnline -> listOf("Mulai narik", "Pendapatan hari ini", "Lapor banjir di Kemang Raya", "Bantuan")
-        else -> listOf("Lapor macet parah di Jalan Sudirman", if (state.wakeWord) "Halo Mitra, pendapatan hari ini" else "Pendapatan hari ini", "Nyalakan autobid", "Offline", "Bantuan")
+        else -> listOf("Lapor macet parah di Jalan Sudirman", if (wakeReady) "Halo Mitra, pendapatan hari ini" else "Pendapatan hari ini", "Nyalakan autobid", "Offline", "Bantuan")
     }
 }

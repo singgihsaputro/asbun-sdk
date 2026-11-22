@@ -15,7 +15,8 @@ actual val platformName: String
 private val wakeTone by lazy { android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 80) }
 
 actual fun playWakeTone() {
-    wakeTone.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 150)
+    // ToneGenerator throws when no audio resource is free; a missing beep must never crash the SDK listener.
+    runCatching { wakeTone.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 150) }
 }
 
 @androidx.compose.runtime.Composable
