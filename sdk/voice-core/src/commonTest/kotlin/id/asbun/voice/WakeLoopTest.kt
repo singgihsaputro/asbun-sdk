@@ -16,17 +16,30 @@ class WakeLoopTest {
 
     private val wakeConfig = VoiceConfig(wakeWord = WakeWordConfig(listOf("halo mitra")), dispatch = DispatchConfig(listOf("ojolmitra")))
 
-    private class Harness(val sdk: VoiceSdk, val engine: FakeVoiceEngine, val events: MutableList<VoiceEvent>)
+    private class Harness(
+        val sdk: VoiceSdk,
+        val engine: FakeVoiceEngine,
+        val events: MutableList<VoiceEvent>,
+        val opened: MutableList<String>,
+        val requests: MutableList<LlmRequest>,
+    )
 
-    private fun TestScope.setup(config: VoiceConfig = wakeConfig, wakeAvailable: Boolean = true): Harness {
+    private fun TestScope.setup(config: VoiceConfig = wakeConfig, wakeAvailable: Boolean = true, withLlm: Boolean = false): Harness {
         val engine = FakeVoiceEngine().also { it.wakeAvailable = wakeAvailable }
-        val sdk = VoiceSdk(config, TEST_MANIFEST, engine, backgroundScope, linkOpener = { true }, llmClient = null, clock = { 0L })
+        val opened = mutableListOf<String>()
+        val requests = mutableListOf<LlmRequest>()
+        val llm = if (withLlm) LlmClient { req -> requests += req; LlmDecision(null) } else null
+        val sdk = VoiceSdk(config, TEST_MANIFEST, engine, backgroundScope, linkOpener = { opened += it; true }, llmClient = llm, clock = { 0L })
         val events = mutableListOf<VoiceEvent>()
         sdk.addEventListener { events += it }
-        return Harness(sdk, engine, events)
+        return Harness(sdk, engine, events, opened, requests)
     }
 
-    private fun TestScope.enabled(): Harness = setup().also { it.sdk.setWakeWord(true) }
+    private fun TestScope.enabled(context: VoiceContext = VoiceContext.EMPTY, withLlm: Boolean = false): Harness =
+        setup(withLlm = withLlm).also {
+            it.sdk.setContext(context)
+            it.sdk.setWakeWord(true)
+        }
 
     @Test
     fun enablingStartsWakeSession() = runTest {
@@ -144,5 +157,65 @@ class WakeLoopTest {
         h.sdk.close()
         advanceTimeBy(1_000)
         assertEquals(1, h.engine.listenCount)
+    }
+
+    // ------------------------------------------------------------------ acting on the phrase
+
+    @Test
+    fun phrasePlusCommandRuns() = runTest {
+        val h = enabled(OFFER)
+        h.engine.say("Halo Mitra, terima")
+        assertEquals(listOf("ojolmitra://order/OM-1/accept"), h.opened)
+        val wake = h.events.indexOf(VoiceEvent.WakeDetected(true))
+        val final = h.events.indexOf(VoiceEvent.Final(listOf("terima")))
+        assertTrue(wake >= 0 && final > wake, "events=${h.events}")
+        assertEquals("terima", h.sdk.state.value.lastHeard)
+    }
+
+    @Test
+    fun phraseAloneStartsCommandSession() = runTest {
+        val h = enabled()
+        h.engine.say("halo mitra")
+        assertTrue(VoiceEvent.WakeDetected(false) in h.events, "events=${h.events}")
+        assertEquals(ListenMode.COMMAND, h.engine.lastMode)
+        assertEquals(VoicePhase.LISTENING, h.sdk.phase)
+        h.sdk.setContext(OFFER)
+        h.engine.say("terima")
+        assertEquals(listOf("ojolmitra://order/OM-1/accept"), h.opened)
+    }
+
+    @Test
+    fun phraseAloneThenSilenceReturnsQuietly() = runTest {
+        val h = enabled()
+        h.engine.say("halo mitra")
+        h.engine.silence()
+        advanceTimeBy(251)
+        assertTrue(h.engine.spoken.isEmpty(), "spoken=${h.engine.spoken}")
+        assertTrue(h.events.none { it is VoiceEvent.NoMatch }, "events=${h.events}")
+        assertEquals(ListenMode.WAKE, h.engine.lastMode)
+        assertTrue(h.sdk.state.value.wakeListening)
+    }
+
+    @Test
+    fun chatterNeverReachesLlm() = runTest {
+        val h = enabled(withLlm = true)
+        h.engine.say("iya bu saya kejebak macet")
+        assertTrue(h.requests.isEmpty(), "requests=${h.requests}")
+    }
+
+    @Test
+    fun onlyRemainderReachesLlm() = runTest {
+        val h = enabled(HOME, withLlm = true)
+        h.engine.say("halo mitra airnya sepinggang")
+        assertEquals("airnya sepinggang", h.requests.single().transcript)
+    }
+
+    @Test
+    fun wakeResumesAfterCommand() = runTest {
+        val h = enabled(OFFER)
+        h.engine.say("halo mitra terima")
+        assertEquals(listOf("Order diterima."), h.engine.spoken)
+        assertEquals(ListenMode.WAKE, h.engine.lastMode)
+        assertTrue(h.sdk.state.value.wakeListening)
     }
 }

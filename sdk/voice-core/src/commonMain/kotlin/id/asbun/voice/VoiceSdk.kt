@@ -188,7 +188,7 @@ public class VoiceSdk(
         }
 
         override fun onFinalResult(alternatives: List<String>) {
-            if (wakeOpen) return endWakeSession(null) // no phrase yet: chatter, restart quietly
+            if (wakeOpen) return onWakeFinal(alternatives)
             if (phase != VoicePhase.LISTENING) return
             val cleaned = alternatives.map { it.trim() }.filter { it.isNotEmpty() }
             if (cleaned.isEmpty()) onListeningError(VoiceError.NO_MATCH) else process(cleaned, listeningPrompted)
@@ -434,6 +434,19 @@ public class VoiceSdk(
         if (!wakeOpen) return
         update { it.copy(wakeListening = false) }
         engine.cancelListening()
+    }
+
+    /** Only the words after the phrase leave this function; chatter restarts quietly. */
+    private fun onWakeFinal(alternatives: List<String>) {
+        val phrases = config.wakeWord?.phrases.orEmpty()
+        val remainders = alternatives.mapNotNull { resolver.matcher.wakeRemainder(it, phrases) }
+        if (remainders.isEmpty()) return endWakeSession(null)
+        update { it.copy(wakeListening = false) }
+        wakeBackoffMs = WAKE_BACKOFF_START_MS
+        val commands = remainders.filter { it.isNotBlank() }
+        emit(VoiceEvent.WakeDetected(commandFollows = commands.isNotEmpty()))
+        reprompts = 0
+        if (commands.isEmpty()) listen(prompted = false) else process(commands, prompted = false)
     }
 
     /** [error] null = the session ended without a wake phrase (final result or silence). */
