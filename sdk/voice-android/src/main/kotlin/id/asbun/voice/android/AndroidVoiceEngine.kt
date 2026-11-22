@@ -9,6 +9,9 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.speech.RecognitionListener
+import android.util.Log
+import android.speech.RecognitionSupport
+import android.speech.RecognitionSupportCallback
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
@@ -40,15 +43,23 @@ public class AndroidVoiceEngine(
         get() = SpeechRecognizer.isRecognitionAvailable(appContext)
 
     override val isWakeListeningAvailable: Boolean
-        get() = Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)
+        // Android 13+: only there can the app confirm the language is installed offline before listening.
+        get() = Build.VERSION.SDK_INT >= 33 && SpeechRecognizer.isRecognitionAvailable(appContext)
 
     private var recognizer: SpeechRecognizer? = null
-    /** On-device recognizer used for wake sessions (API 31+), created lazily. */
+    /**
+     * Second instance of the default recognizer, used for wake sessions with EXTRA_PREFER_OFFLINE
+     * ("only use an offline engine"). A separate instance keeps wake callbacks out of command sessions.
+     */
     private var wakeRecognizer: SpeechRecognizer? = null
     private var wakeActive = false
     private val activeRecognizer get() = if (wakeActive) wakeRecognizer else recognizer
     /** Active listening session; events outside it are ignored (see the [VoiceEngineListener] contract). */
     private var sessionActive = false
+    /** Bumped by every start and cancel; a posted start or support check from an older value is stale. */
+    private var startGen = 0
+    /** Languages the recognizer reported as installed for offline use (wake mode, Android 13+). */
+    private val wakeLanguagesInstalled = mutableSetOf<String>()
     private var lastPartial: String = ""
 
     private var tts: TextToSpeech? = null
@@ -102,9 +113,12 @@ public class AndroidVoiceEngine(
     override fun startListening(languageTag: String, mode: ListenMode): Unit = start(languageTag, mode)
 
     private fun start(languageTag: String, mode: ListenMode) {
-        // Synchronous: callbacks of the previous session already queued on main must be dropped.
+        // Synchronous: callbacks of the previous session already queued on main must be dropped,
+        // and a start superseded before its posted body runs must not run at all.
         sessionActive = false
+        val gen = ++startGen
         main.post {
+            if (gen != startGen) return@post
             val wake = mode == ListenMode.WAKE
             if (appContext.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 // Wake sessions never ask: the permission screen pauses the app, which restarts wake -> endless loop.
@@ -116,40 +130,100 @@ public class AndroidVoiceEngine(
                 listener?.onListeningError(VoiceError.NOT_AVAILABLE)
                 return@post
             }
-            tts?.stop()
-            // Starting either mode cancels the other recognizer first; no events from it after that.
-            sessionActive = false
-            activeRecognizer?.cancel()
-            wakeActive = wake
-            val r = if (wake) {
-                wakeRecognizer ?: createWakeRecognizer().also { wakeRecognizer = it }
-            } else {
-                recognizer ?: SpeechRecognizer.createSpeechRecognizer(appContext).also {
-                    it.setRecognitionListener(listenerFor(false))
-                    recognizer = it
-                }
+            if (wake && Build.VERSION.SDK_INT >= 33 && languageTag !in wakeLanguagesInstalled) {
+                checkWakeLanguage(languageTag, gen)
+                return@post
             }
-            r.cancel()
-            sessionActive = true
-            lastPartial = ""
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, languageTag)
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
-                putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, appContext.packageName)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, endOfSpeechMs)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, endOfSpeechMs * 3 / 4)
-                if (wake) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-            }
-            r.startListening(intent)
+            begin(languageTag, wake)
         }
     }
 
-    @android.annotation.TargetApi(31)
-    private fun createWakeRecognizer(): SpeechRecognizer =
-        SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext).also { it.setRecognitionListener(listenerFor(true)) }
+    /**
+     * Ask the recognizer whether [languageTag] is installed for offline use before a wake session:
+     * wake audio must never go online, so without a confirmed offline language there is no wake
+     * session (NOT_AVAILABLE). Only a positive answer is cached: after the user installs the language,
+     * the next wake start sees it.
+     */
+    @android.annotation.TargetApi(33)
+    private fun checkWakeLanguage(languageTag: String, gen: Int) {
+        val r = wakeRecognizer ?: createWakeRecognizer().also { wakeRecognizer = it }
+        val intent = recognizerIntent(languageTag, wake = true)
+        // Some services answer more than once (seen: error 14, then the same result twice), so act
+        // once per check: a result wins; an error counts only if no result follows shortly.
+        var answered = false
+        r.checkRecognitionSupport(intent, appContext.mainExecutor, object : RecognitionSupportCallback {
+            override fun onSupportResult(support: RecognitionSupport) {
+                if (answered || gen != startGen) return
+                answered = true
+                if (support.installedOnDeviceLanguages.any { sameLanguage(it, languageTag) }) {
+                    wakeLanguagesInstalled += languageTag
+                    begin(languageTag, wake = true)
+                } else {
+                    Log.i(TAG, "$languageTag not installed offline: ${support.installedOnDeviceLanguages}")
+                    listener?.onListeningError(VoiceError.NOT_AVAILABLE)
+                }
+            }
+
+            override fun onError(error: Int) {
+                main.postDelayed({
+                    if (answered || gen != startGen) return@postDelayed
+                    answered = true
+                    Log.i(TAG, "Recognition support check failed: error $error")
+                    // Can't confirm offline support: don't risk streaming car audio.
+                    listener?.onListeningError(VoiceError.NOT_AVAILABLE)
+                }, SUPPORT_ERROR_GRACE_MS)
+            }
+        })
+    }
+
+    private fun begin(languageTag: String, wake: Boolean) {
+        tts?.stop()
+        // Starting either mode cancels the other recognizer first; no events from it after that.
+        sessionActive = false
+        activeRecognizer?.cancel()
+        wakeActive = wake
+        val r = if (wake) {
+            // A fresh instance per wake session: the service finishes the previous session only when the
+            // next one starts, and its late error must not reach (and end) the new session.
+            // Destroy the old one a moment later: destroying it right before the new one starts makes
+            // the new session fail with ERROR_SERVER_DISCONNECTED. Its callbacks are already ignored.
+            wakeRecognizer?.let { old -> main.postDelayed({ old.destroy() }, 1_000) }
+            createWakeRecognizer().also { wakeRecognizer = it }
+        } else {
+            recognizer ?: newRecognizer().also { recognizer = it }
+        }
+        r.cancel()
+        sessionActive = true
+        lastPartial = ""
+        r.startListening(recognizerIntent(languageTag, wake))
+    }
+
+    private fun recognizerIntent(languageTag: String, wake: Boolean): Intent =
+        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, languageTag)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+            putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, appContext.packageName)
+            // Commands only: a short silence limit also ends a session that hasn't heard speech yet,
+            // which would make wake sessions restart every ~3 s and drop words in the gaps.
+            // Int, not Long: recognizers read these with getInt and ignore a Long (default 0).
+            if (!wake) {
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, endOfSpeechMs.toInt())
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, (endOfSpeechMs * 3 / 4).toInt())
+            }
+            if (wake) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+        }
+
+    private fun createWakeRecognizer(): SpeechRecognizer = newRecognizer()
+
+    private fun newRecognizer(): SpeechRecognizer {
+        lateinit var r: SpeechRecognizer
+        r = SpeechRecognizer.createSpeechRecognizer(appContext)
+        r.setRecognitionListener(listenerFor { r })
+        return r
+    }
 
     override fun stopListening() {
         main.post { if (sessionActive) activeRecognizer?.stopListening() }
@@ -158,12 +232,13 @@ public class AndroidVoiceEngine(
     override fun cancelListening() {
         // Synchronous (see the VoiceEngineListener contract); only the recognizer call is deferred.
         sessionActive = false
+        ++startGen
         main.post { activeRecognizer?.cancel() }
     }
 
-    private fun listenerFor(wake: Boolean): RecognitionListener = object : RecognitionListener {
-        // Only the recognizer of the current session may emit; stale callbacks from a cancelled one are dropped.
-        private val live get() = sessionActive && wakeActive == wake
+    private fun listenerFor(owner: () -> SpeechRecognizer): RecognitionListener = object : RecognitionListener {
+        // Only the recognizer instance of the current session may emit; stale callbacks are dropped.
+        private val live get() = sessionActive && activeRecognizer === owner()
 
         override fun onReadyForSpeech(params: Bundle?) {
             if (live) listener?.onListeningStarted()
@@ -273,4 +348,15 @@ public class AndroidVoiceEngine(
             tts = null
         }
     }
+}
+
+private const val TAG = "AndroidVoiceEngine"
+
+/** How long a failed support check waits for a late result before reporting NOT_AVAILABLE. */
+private const val SUPPORT_ERROR_GRACE_MS = 1_000L
+
+/** "id-ID", "id_ID", "in-ID" and "id" are the same language (Android still uses the legacy "in" code). */
+private fun sameLanguage(a: String, b: String): Boolean {
+    fun lang(tag: String) = tag.substringBefore('-').substringBefore('_').lowercase().let { if (it == "in") "id" else it }
+    return lang(a) == lang(b)
 }
