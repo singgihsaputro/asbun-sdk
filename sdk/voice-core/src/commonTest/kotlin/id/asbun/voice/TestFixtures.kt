@@ -83,9 +83,17 @@ internal class FakeVoiceEngine(override val isRecognitionAvailable: Boolean = tr
     var listenCount = 0
         private set
 
-    override fun startListening(languageTag: String) {
+    var wakeAvailable = true
+    override val isWakeListeningAvailable: Boolean get() = wakeAvailable
+    var lastMode: ListenMode? = null
+        private set
+
+    override fun startListening(languageTag: String) = startListening(languageTag, ListenMode.COMMAND)
+
+    override fun startListening(languageTag: String, mode: ListenMode) {
         listening = true
         listenCount++
+        lastMode = mode
         listener?.onListeningStarted()
     }
 
@@ -119,5 +127,11 @@ internal class FakeVoiceEngine(override val isRecognitionAvailable: Boolean = tr
         check(listening) { "not listening" }
         listening = false
         listener?.onListeningError(VoiceError.NO_MATCH)
+    }
+
+    fun fail(error: VoiceError) {
+        check(listening) { "not listening" }
+        listening = false
+        listener?.onListeningError(error)
     }
 }

@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -16,6 +17,9 @@ import kotlinx.coroutines.launch
 import kotlin.time.TimeSource
 
 public enum class VoicePhase { IDLE, LISTENING, PROCESSING, SPEAKING }
+
+/** Why the wake word is not listening although it was enabled. */
+public enum class WakeUnavailableReason { NOT_CONFIGURED, NO_ON_DEVICE_RECOGNITION, PERMISSION_DENIED }
 
 /** What the SDK is waiting for after asking a question. */
 public sealed interface Awaiting {
@@ -34,6 +38,9 @@ public data class VoiceState(
     val awaiting: Awaiting? = null,
     /** True while listening for an answer to a question (from the app or the SDK). */
     val prompted: Boolean = false,
+    /** True while a background wake-word session is open (phase stays IDLE). */
+    val wakeListening: Boolean = false,
+    val wakeUnavailable: WakeUnavailableReason? = null,
 )
 
 public sealed interface VoiceEvent {
@@ -61,6 +68,9 @@ public sealed interface VoiceEvent {
         val deeplink: String? = null,
     ) : VoiceEvent
     public data class Error(val code: VoiceErrorCode, val message: String) : VoiceEvent
+
+    /** The wake phrase was heard; [commandFollows] = a command came in the same breath. */
+    public data class WakeDetected(val commandFollows: Boolean) : VoiceEvent
 }
 
 /** Receives every [VoiceEvent] synchronously, on the main thread, as it happens. Handy from Swift. */
@@ -152,13 +162,18 @@ public class VoiceSdk(
     private var pendingConfirm: Resolution.Matched? = null
     private var lastAction: Triple<String, String, Long>? = null
     private var processJob: Job? = null
+    private var wakeEnabled = false
+    private var wakeRestartJob: Job? = null
+    private var wakeBackoffMs = WAKE_BACKOFF_START_MS
 
     private val listener = object : VoiceEngineListener {
         override fun onListeningStarted() {
+            if (wakeOpen) return
             if (phase != VoicePhase.LISTENING) update { it.copy(phase = VoicePhase.LISTENING) }
         }
 
         override fun onSoundLevel(level: Float) {
+            if (wakeOpen) return
             if (phase != VoicePhase.LISTENING) return
             val clamped = level.coerceIn(0f, 1f)
             update { it.copy(level = clamped) }
@@ -166,22 +181,26 @@ public class VoiceSdk(
         }
 
         override fun onPartialResult(text: String) {
+            if (wakeOpen) return
             if (phase != VoicePhase.LISTENING) return
             update { it.copy(partialText = text) }
             emit(VoiceEvent.Partial(text))
         }
 
         override fun onFinalResult(alternatives: List<String>) {
+            if (wakeOpen) return endWakeSession(null) // no phrase yet: chatter, restart quietly
             if (phase != VoicePhase.LISTENING) return
             val cleaned = alternatives.map { it.trim() }.filter { it.isNotEmpty() }
             if (cleaned.isEmpty()) onListeningError(VoiceError.NO_MATCH) else process(cleaned, listeningPrompted)
         }
 
         override fun onListeningError(error: VoiceError) {
+            if (wakeOpen) return endWakeSession(error)
             if (phase == VoicePhase.LISTENING) handleListenError(error)
         }
 
         override fun onListeningEnded() {
+            if (wakeOpen) return endWakeSession(null)
             if (phase == VoicePhase.LISTENING) {
                 update { it.copy(phase = VoicePhase.IDLE, level = 0f) }
                 drainQueueOrIdle()
@@ -272,8 +291,28 @@ public class VoiceSdk(
         }
     }
 
+    /**
+     * Listen for the wake phrase whenever the SDK is idle. Needs [VoiceConfig.wakeWord] and
+     * on-device recognition; otherwise [VoiceState.wakeUnavailable] says why.
+     */
+    public fun setWakeWord(enabled: Boolean) {
+        if (!enabled) {
+            wakeEnabled = false
+            stopWake()
+            return
+        }
+        update { it.copy(wakeUnavailable = null) }
+        if (config.wakeWord == null) {
+            update { it.copy(wakeUnavailable = WakeUnavailableReason.NOT_CONFIGURED) }
+            return
+        }
+        wakeEnabled = true
+        tryStartWake()
+    }
+
     /** Stop everything: speech, listening, queued replies and open questions. */
     public fun cancel() {
+        stopWake()
         processJob?.cancel()
         queue.clear()
         listenAfterSpeech = false
@@ -283,6 +322,7 @@ public class VoiceSdk(
         engine.cancelListening()
         engine.stopSpeaking()
         update { it.copy(phase = VoicePhase.IDLE, partialText = "", level = 0f, error = null, awaiting = null, prompted = false) }
+        tryStartWake()
     }
 
     /**
@@ -303,6 +343,7 @@ public class VoiceSdk(
 
     /** Stop everything and release the engine (recognizer, audio session, TTS). The SDK is unusable afterwards. */
     public fun close() {
+        wakeEnabled = false
         cancel()
         eventListeners.clear()
         engine.listener = null
@@ -328,6 +369,7 @@ public class VoiceSdk(
     }
 
     private fun speakNow(utterance: Utterance) {
+        stopWake()
         val id = "utt-${++utteranceCounter}"
         currentUtteranceId = id
         listenAfterSpeech = utterance.listenAfter
@@ -336,6 +378,7 @@ public class VoiceSdk(
     }
 
     private fun listen(prompted: Boolean) {
+        stopWake()
         if (!engine.isRecognitionAvailable) {
             update { it.copy(phase = VoicePhase.IDLE, error = VoiceErrorCode.STT_UNAVAILABLE, recognitionAvailable = false) }
             emit(VoiceEvent.Error(VoiceErrorCode.STT_UNAVAILABLE, "Speech recognition is not available on this device"))
@@ -363,6 +406,66 @@ public class VoiceSdk(
 
     private fun goIdle() {
         update { it.copy(phase = VoicePhase.IDLE, level = 0f) }
+        tryStartWake()
+    }
+
+    // ================================================================== wake word
+    // A wake session is a ListenMode.WAKE engine session while phase stays IDLE. Its callbacks
+    // never touch phase, partialText, level or Partial/Final events: overheard text stays private.
+
+    private val wakeOpen: Boolean get() = _state.value.wakeListening
+
+    private fun tryStartWake() {
+        if (!wakeEnabled || wakeOpen || _state.value.wakeUnavailable != null || phase != VoicePhase.IDLE) return
+        if (queue.isNotEmpty() || currentUtteranceId != null || pendingInput != null || pendingConfirm != null) return
+        if (!engine.isWakeListeningAvailable) {
+            update { it.copy(wakeUnavailable = WakeUnavailableReason.NO_ON_DEVICE_RECOGNITION) }
+            return
+        }
+        wakeRestartJob?.cancel()
+        wakeRestartJob = null
+        update { it.copy(wakeListening = true) }
+        engine.startListening(config.locale, ListenMode.WAKE)
+    }
+
+    private fun stopWake() {
+        wakeRestartJob?.cancel()
+        wakeRestartJob = null
+        if (!wakeOpen) return
+        update { it.copy(wakeListening = false) }
+        engine.cancelListening()
+    }
+
+    /** [error] null = the session ended without a wake phrase (final result or silence). */
+    private fun endWakeSession(error: VoiceError?) {
+        update { it.copy(wakeListening = false) }
+        when (error) {
+            null, VoiceError.NO_MATCH -> {
+                wakeBackoffMs = WAKE_BACKOFF_START_MS
+                restartWakeAfter(WAKE_RESTART_MS)
+            }
+            VoiceError.PERMISSION_DENIED -> {
+                update { it.copy(wakeUnavailable = WakeUnavailableReason.PERMISSION_DENIED) }
+                emit(VoiceEvent.Error(VoiceErrorCode.PERMISSION_DENIED, "Wake word: microphone permission denied"))
+            }
+            VoiceError.NOT_AVAILABLE -> {
+                update { it.copy(wakeUnavailable = WakeUnavailableReason.NO_ON_DEVICE_RECOGNITION) }
+                emit(VoiceEvent.Error(VoiceErrorCode.STT_UNAVAILABLE, "Wake word: on-device recognition not available"))
+            }
+            VoiceError.NETWORK, VoiceError.BUSY, VoiceError.UNKNOWN -> {
+                restartWakeAfter(wakeBackoffMs)
+                wakeBackoffMs = (wakeBackoffMs * 2).coerceAtMost(WAKE_BACKOFF_MAX_MS)
+            }
+        }
+    }
+
+    private fun restartWakeAfter(ms: Long) {
+        wakeRestartJob?.cancel()
+        wakeRestartJob = scope.launch {
+            delay(ms)
+            wakeRestartJob = null
+            tryStartWake()
+        }
     }
 
     // ================================================================== recognition
@@ -396,6 +499,7 @@ public class VoiceSdk(
     }
 
     private fun process(alternatives: List<String>, prompted: Boolean) {
+        stopWake()
         processJob?.cancel() // a new utterance replaces one still being resolved
         val heard = alternatives.first()
         update { it.copy(phase = VoicePhase.PROCESSING, partialText = heard, lastHeard = heard, level = 0f, error = null) }
@@ -638,6 +742,10 @@ public class VoiceSdk(
         ): VoiceSdk = VoiceSdk(config, manifest, engine, scope, linkOpener, llmClient)
     }
 }
+
+private const val WAKE_RESTART_MS = 250L
+private const val WAKE_BACKOFF_START_MS = 1_000L
+private const val WAKE_BACKOFF_MAX_MS = 30_000L
 
 private fun monotonicMillis(): () -> Long {
     val start = TimeSource.Monotonic.markNow()

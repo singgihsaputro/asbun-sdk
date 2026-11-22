@@ -10,6 +10,9 @@ public enum class VoiceError {
     UNKNOWN,
 }
 
+/** [WAKE]: a background session listening for the wake phrase; must stay on-device. */
+public enum class ListenMode { COMMAND, WAKE }
+
 /**
  * Events from a platform speech engine. Always delivered on the main thread.
  *
@@ -46,6 +49,13 @@ public interface VoiceEngine {
     public val isRecognitionAvailable: Boolean
     public var listener: VoiceEngineListener?
     public fun startListening(languageTag: String)
+
+    /** True when [ListenMode.WAKE] sessions can run on-device (audio never leaves the phone). */
+    public val isWakeListeningAvailable: Boolean get() = false
+
+    public fun startListening(languageTag: String, mode: ListenMode) {
+        startListening(languageTag)
+    }
 
     /** Stop recording and deliver the final result as soon as possible. */
     public fun stopListening()
