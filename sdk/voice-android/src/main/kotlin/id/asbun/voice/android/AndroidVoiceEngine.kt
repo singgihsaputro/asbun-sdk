@@ -122,7 +122,7 @@ public class AndroidVoiceEngine(
                 wakeRecognizer ?: createWakeRecognizer().also { wakeRecognizer = it }
             } else {
                 recognizer ?: SpeechRecognizer.createSpeechRecognizer(appContext).also {
-                    it.setRecognitionListener(recognitionListener)
+                    it.setRecognitionListener(listenerFor(false))
                     recognizer = it
                 }
             }
@@ -146,7 +146,7 @@ public class AndroidVoiceEngine(
 
     @android.annotation.TargetApi(31)
     private fun createWakeRecognizer(): SpeechRecognizer =
-        SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext).also { it.setRecognitionListener(recognitionListener) }
+        SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext).also { it.setRecognitionListener(listenerFor(true)) }
 
     override fun stopListening() {
         main.post { if (sessionActive) activeRecognizer?.stopListening() }
@@ -159,23 +159,26 @@ public class AndroidVoiceEngine(
         }
     }
 
-    private val recognitionListener = object : RecognitionListener {
+    private fun listenerFor(wake: Boolean): RecognitionListener = object : RecognitionListener {
+        // Only the recognizer of the current session may emit; stale callbacks from a cancelled one are dropped.
+        private val live get() = sessionActive && wakeActive == wake
+
         override fun onReadyForSpeech(params: Bundle?) {
-            if (sessionActive) listener?.onListeningStarted()
+            if (live) listener?.onListeningStarted()
         }
 
         override fun onBeginningOfSpeech() {}
 
         override fun onRmsChanged(rmsdB: Float) {
             // rmsdB is roughly -2..10 dB -> 0..1
-            if (sessionActive) listener?.onSoundLevel(((rmsdB + 2f) / 12f).coerceIn(0f, 1f))
+            if (live) listener?.onSoundLevel(((rmsdB + 2f) / 12f).coerceIn(0f, 1f))
         }
 
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() {}
 
         override fun onError(error: Int) {
-            if (!sessionActive) return
+            if (!live) return
             sessionActive = false
             // Sometimes the partial result was right but the engine timed out: use it.
             if ((error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) && lastPartial.isNotBlank()) {
@@ -186,7 +189,7 @@ public class AndroidVoiceEngine(
         }
 
         override fun onResults(results: Bundle?) {
-            if (!sessionActive) return
+            if (!live) return
             sessionActive = false
             val texts = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty().filter { it.isNotBlank() }
             when {
@@ -197,7 +200,7 @@ public class AndroidVoiceEngine(
         }
 
         override fun onPartialResults(partialResults: Bundle?) {
-            if (!sessionActive) return
+            if (!live) return
             val text = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
             if (!text.isNullOrBlank()) {
                 lastPartial = text
