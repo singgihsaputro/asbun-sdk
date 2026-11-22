@@ -13,6 +13,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import id.asbun.voice.LlmConfig
 import id.asbun.voice.LlmProtocol
+import id.asbun.voice.LogLevel
 import id.asbun.voice.android.VoiceSdkAndroid
 import id.ojolmitra.driver.App
 import id.ojolmitra.driver.voice.OjolMitraVoice
@@ -31,6 +32,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val config = OjolMitraVoice.config(llm = llmFromBuildConfig())
+            .let { if (BuildConfig.DEBUG) it.copy(logLevel = LogLevel.DEBUG) else it }
         setContent {
             // The SDK is released (engine shut down) when the composition is disposed.
             App(

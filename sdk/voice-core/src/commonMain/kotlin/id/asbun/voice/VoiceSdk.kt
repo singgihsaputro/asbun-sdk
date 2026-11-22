@@ -418,8 +418,14 @@ public class VoiceSdk(
     private val wakeOpen: Boolean get() = _state.value.wakeListening
 
     private fun tryStartWake() {
-        if (!wakeEnabled || wakeOpen || _state.value.wakeUnavailable != null || phase != VoicePhase.IDLE) return
-        if (queue.isNotEmpty() || currentUtteranceId != null) return
+        if (!wakeEnabled || wakeOpen) return
+        val blocked = when {
+            _state.value.wakeUnavailable != null -> "unavailable: ${_state.value.wakeUnavailable}"
+            phase != VoicePhase.IDLE -> "phase $phase"
+            queue.isNotEmpty() || currentUtteranceId != null -> "speech pending"
+            else -> null
+        }
+        if (blocked != null) return log(LogLevel.DEBUG, "Wake not started ($blocked)")
         if (pendingInput != null || pendingConfirm != null) {
             // Idle with no answer being listened for: the question was abandoned (e.g. cancelListening).
             pendingInput = null
@@ -433,6 +439,7 @@ public class VoiceSdk(
         wakeRestartJob?.cancel()
         wakeRestartJob = null
         update { it.copy(wakeListening = true) }
+        log(LogLevel.DEBUG, "Wake session started")
         engine.startListening(config.locale, ListenMode.WAKE)
     }
 
@@ -440,6 +447,7 @@ public class VoiceSdk(
         wakeRestartJob?.cancel()
         wakeRestartJob = null
         if (!wakeOpen) return
+        log(LogLevel.DEBUG, "Wake session stopped (other work)")
         update { it.copy(wakeListening = false) }
         engine.cancelListening()
     }
@@ -448,6 +456,7 @@ public class VoiceSdk(
     private fun onWakeFinal(alternatives: List<String>) {
         val phrases = config.wakeWord?.phrases.orEmpty()
         val remainders = alternatives.mapNotNull { resolver.matcher.wakeRemainder(it, phrases) }
+        log(LogLevel.DEBUG, "Wake final: ${alternatives.size} alternative(s), phrase ${if (remainders.isEmpty()) "not heard" else "heard"}")
         if (remainders.isEmpty()) return endWakeSession(null)
         update { it.copy(wakeListening = false) }
         wakeBackoffMs = WAKE_BACKOFF_START_MS
@@ -460,6 +469,7 @@ public class VoiceSdk(
 
     /** [error] null = the session ended without a wake phrase (final result or silence). */
     private fun endWakeSession(error: VoiceError?) {
+        log(LogLevel.DEBUG, "Wake session ended (${error ?: "no phrase"})")
         update { it.copy(wakeListening = false) }
         when (error) {
             null, VoiceError.NO_MATCH -> {
@@ -743,7 +753,10 @@ public class VoiceSdk(
         val before = _state.value.phase
         _state.update(transform)
         val after = _state.value.phase
-        if (after != before) emit(VoiceEvent.StateChanged(after))
+        if (after != before) {
+            log(LogLevel.DEBUG, "Phase $before -> $after")
+            emit(VoiceEvent.StateChanged(after))
+        }
     }
 
     private fun emit(event: VoiceEvent) {
