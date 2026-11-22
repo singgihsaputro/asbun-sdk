@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -12,6 +13,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import id.asbun.voice.ListenMode
 import id.asbun.voice.VoiceEngine
 import id.asbun.voice.VoiceEngineListener
 import id.asbun.voice.VoiceError
@@ -37,7 +39,14 @@ public class AndroidVoiceEngine(
     override val isRecognitionAvailable: Boolean
         get() = SpeechRecognizer.isRecognitionAvailable(appContext)
 
+    override val isWakeListeningAvailable: Boolean
+        get() = Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)
+
     private var recognizer: SpeechRecognizer? = null
+    /** On-device recognizer used for wake sessions (API 31+), created lazily. */
+    private var wakeRecognizer: SpeechRecognizer? = null
+    private var wakeActive = false
+    private val activeRecognizer get() = if (wakeActive) wakeRecognizer else recognizer
     /** Active listening session; events outside it are ignored (see the [VoiceEngineListener] contract). */
     private var sessionActive = false
     private var lastPartial: String = ""
@@ -88,21 +97,34 @@ public class AndroidVoiceEngine(
 
     // ------------------------------------------------------------------ STT
 
-    override fun startListening(languageTag: String) {
+    override fun startListening(languageTag: String): Unit = start(languageTag, ListenMode.COMMAND)
+
+    override fun startListening(languageTag: String, mode: ListenMode): Unit = start(languageTag, mode)
+
+    private fun start(languageTag: String, mode: ListenMode) {
         main.post {
+            val wake = mode == ListenMode.WAKE
             if (appContext.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 requestPermission()
                 listener?.onListeningError(VoiceError.PERMISSION_DENIED)
                 return@post
             }
-            if (!isRecognitionAvailable) {
+            if (if (wake) !isWakeListeningAvailable else !isRecognitionAvailable) {
                 listener?.onListeningError(VoiceError.NOT_AVAILABLE)
                 return@post
             }
             tts?.stop()
-            val r = recognizer ?: SpeechRecognizer.createSpeechRecognizer(appContext).also {
-                it.setRecognitionListener(recognitionListener)
-                recognizer = it
+            // Starting either mode cancels the other recognizer first; no events from it after that.
+            sessionActive = false
+            activeRecognizer?.cancel()
+            wakeActive = wake
+            val r = if (wake) {
+                wakeRecognizer ?: createWakeRecognizer().also { wakeRecognizer = it }
+            } else {
+                recognizer ?: SpeechRecognizer.createSpeechRecognizer(appContext).also {
+                    it.setRecognitionListener(recognitionListener)
+                    recognizer = it
+                }
             }
             r.cancel()
             sessionActive = true
@@ -116,19 +138,24 @@ public class AndroidVoiceEngine(
                 putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, appContext.packageName)
                 putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, endOfSpeechMs)
                 putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, endOfSpeechMs * 3 / 4)
+                if (wake) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             }
             r.startListening(intent)
         }
     }
 
+    @android.annotation.TargetApi(31)
+    private fun createWakeRecognizer(): SpeechRecognizer =
+        SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext).also { it.setRecognitionListener(recognitionListener) }
+
     override fun stopListening() {
-        main.post { if (sessionActive) recognizer?.stopListening() }
+        main.post { if (sessionActive) activeRecognizer?.stopListening() }
     }
 
     override fun cancelListening() {
         main.post {
             sessionActive = false
-            recognizer?.cancel()
+            activeRecognizer?.cancel()
         }
     }
 
@@ -235,6 +262,8 @@ public class AndroidVoiceEngine(
             sessionActive = false
             recognizer?.destroy()
             recognizer = null
+            wakeRecognizer?.destroy()
+            wakeRecognizer = null
             tts?.shutdown()
             tts = null
         }
