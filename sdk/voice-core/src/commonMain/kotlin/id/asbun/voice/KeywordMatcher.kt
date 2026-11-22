@@ -153,6 +153,22 @@ public class KeywordMatcher(
         return null
     }
 
+    /**
+     * Wake-word check: null unless a phrase (each word exact or one letter off) starts [text];
+     * otherwise the words after it as spoken, "" when nothing follows. Fillers are kept on purpose.
+     */
+    internal fun wakeRemainder(text: String, phrases: List<String>): String? {
+        val tokens = normalizer.tokenize(text)
+        for (phrase in phrases) {
+            val words = normalizer.words(phrase)
+            if (words.isEmpty() || tokens.size < words.size) continue
+            if (words.indices.all { tokens[it].canon == words[it] || withinOneEdit(tokens[it].canon, words[it]) }) {
+                return tokens.drop(words.size).joinToString(" ") { it.original }.trimStart(',', '.', '!', '?', ' ')
+            }
+        }
+        return null
+    }
+
     /** Matching form of a word list, for yes/no/cancel checks. */
     public fun canonicalWords(text: String): List<String> = normalizer.tokenize(text).map { it.canon }
 

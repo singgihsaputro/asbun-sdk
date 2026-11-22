@@ -129,6 +129,9 @@ public data class VoiceMessages(
     }
 }
 
+/** Hands-free wake phrases, e.g. `listOf("halo mitra")`. */
+public data class WakeWordConfig(val phrases: List<String>)
+
 /** Everything an app configures; build it in code or load the non-secret parts with [fromJson]. */
 public data class VoiceConfig(
     /** BCP 47 tag for speech and matching, e.g. `id-ID`. */
@@ -142,6 +145,8 @@ public data class VoiceConfig(
     val privacy: PrivacyConfig = PrivacyConfig(),
     val logLevel: LogLevel = LogLevel.NONE,
     val messages: VoiceMessages = VoiceMessages.forLocale(locale),
+    /** Null disables wake-word listening. Not read by [fromJson]. */
+    val wakeWord: WakeWordConfig? = null,
 ) {
     public companion object {
         /**
