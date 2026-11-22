@@ -8,6 +8,7 @@ import id.asbun.voice.VoiceErrorCode
 import id.asbun.voice.VoiceEvent
 import id.asbun.voice.VoiceSdk
 import id.ojolmitra.driver.epochMillis
+import id.ojolmitra.driver.playWakeTone
 import id.ojolmitra.driver.formatClock
 import id.ojolmitra.driver.map.CityMap
 import id.ojolmitra.driver.map.MapPoint
@@ -90,6 +91,10 @@ class DriverController(
             if (event is VoiceEvent.Error && event.code == VoiceErrorCode.PERMISSION_DENIED) {
                 toast("Izinkan akses mikrofon & pengenalan suara di Pengaturan")
             }
+            if (event is VoiceEvent.WakeDetected) {
+                if (_state.value.offer == null) voicePanel.pin(true)
+                if (!event.commandFollows) playWakeTone()
+            }
         }
         voicePanel.onDictationChanged = ::syncVoiceContext
         syncVoiceContext()
@@ -114,6 +119,24 @@ class DriverController(
         mutate { it.copy(handsFree = enabled) }
         if (!enabled) voice.cancel()
         toast(if (enabled) "Mode hands-free aktif" else "Mode hands-free nonaktif")
+    }
+
+    fun setWakeWord(enabled: Boolean) {
+        mutate { it.copy(wakeWord = enabled) }
+        syncWakeWord()
+    }
+
+    /** Kata panggil hanya aktif saat aplikasi terlihat; mic tidak dipegang di latar belakang. */
+    fun setAppForeground(foreground: Boolean) {
+        this.foreground = foreground
+        syncWakeWord()
+    }
+
+    private var foreground = true
+
+    private fun syncWakeWord() {
+        val s = _state.value
+        voice.setWakeWord(s.wakeWord && s.isOnline && foreground)
     }
 
     fun setReadMessagesAloud(enabled: Boolean) = mutate { it.copy(readMessagesAloud = enabled) }
@@ -219,6 +242,7 @@ class DriverController(
         if (online == s.isOnline) return if (online) "Kamu sudah online." else "Kamu sudah offline."
         return if (online) {
             mutate { it.copy(isOnline = true) }
+            syncWakeWord()
             startRoaming()
             scheduleNextOffer()
             "Kamu sekarang online. Semangat narik, ${s.profile.firstName}!"
@@ -228,6 +252,7 @@ class DriverController(
             moveJob?.cancel()
             if (s.offer != null) voice.cancelListening()
             mutate { it.copy(isOnline = false, offer = null) }
+            syncWakeWord()
             "Kamu sekarang offline. Istirahat yang cukup ya."
         }
     }

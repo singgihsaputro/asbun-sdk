@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import id.ojolmitra.driver.KeepScreenOn
 import id.ojolmitra.driver.core.DriverController
 import id.ojolmitra.driver.core.DriverUiState
 import id.ojolmitra.driver.core.HomeTab
@@ -66,6 +67,7 @@ fun DriverApp(controller: DriverController) {
     val voicePanel by controller.voicePanel.state.collectAsState()
     val voice = VoiceUiState.of(sdkVoice, voicePanel, hasOffer = state.offer != null)
     val location by controller.location.collectAsState()
+    KeepScreenOn(state.isOnline)
     val snackbarHost = remember { SnackbarHostState() }
     var reportSheetType by remember { mutableStateOf<TrafficType?>(null) }
     // Simpan offer terakhir supaya animasi keluar tetap punya data.
@@ -99,6 +101,7 @@ fun DriverApp(controller: DriverController) {
                         onMic = controller::onMicPressed,
                         onTry = controller::submitTypedCommand,
                         onHandsFree = controller::setHandsFree,
+                        onWakeWord = controller::setWakeWord,
                         onReadAloud = controller::setReadMessagesAloud,
                         onAutobid = controller::setAutobid,
                     )
@@ -227,6 +230,6 @@ private fun voiceSuggestions(state: DriverUiState): List<String> {
             TripStage.AT_DROPOFF -> listOf("Selesai", "Chat terima kasih sudah order")
         }
         !state.isOnline -> listOf("Mulai narik", "Pendapatan hari ini", "Lapor banjir di Kemang Raya", "Bantuan")
-        else -> listOf("Lapor macet parah di Jalan Sudirman", "Pendapatan hari ini", "Nyalakan autobid", "Offline", "Bantuan")
+        else -> listOf("Lapor macet parah di Jalan Sudirman", if (state.wakeWord) "Halo Mitra, pendapatan hari ini" else "Pendapatan hari ini", "Nyalakan autobid", "Offline", "Bantuan")
     }
 }
