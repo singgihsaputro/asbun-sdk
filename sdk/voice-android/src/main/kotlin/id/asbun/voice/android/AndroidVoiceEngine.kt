@@ -102,10 +102,13 @@ public class AndroidVoiceEngine(
     override fun startListening(languageTag: String, mode: ListenMode): Unit = start(languageTag, mode)
 
     private fun start(languageTag: String, mode: ListenMode) {
+        // Synchronous: callbacks of the previous session already queued on main must be dropped.
+        sessionActive = false
         main.post {
             val wake = mode == ListenMode.WAKE
             if (appContext.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                requestPermission()
+                // Wake sessions never ask: the permission screen pauses the app, which restarts wake -> endless loop.
+                if (!wake) requestPermission()
                 listener?.onListeningError(VoiceError.PERMISSION_DENIED)
                 return@post
             }
@@ -153,10 +156,9 @@ public class AndroidVoiceEngine(
     }
 
     override fun cancelListening() {
-        main.post {
-            sessionActive = false
-            activeRecognizer?.cancel()
-        }
+        // Synchronous (see the VoiceEngineListener contract); only the recognizer call is deferred.
+        sessionActive = false
+        main.post { activeRecognizer?.cancel() }
     }
 
     private fun listenerFor(wake: Boolean): RecognitionListener = object : RecognitionListener {

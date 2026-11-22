@@ -18,8 +18,10 @@ public enum class ListenMode { COMMAND, WAKE }
  *
  * Contract for one listening session: [onListeningStarted] -> (level/partial)* -> exactly ONE
  * terminal event: [onFinalResult], [onListeningError] or [onListeningEnded] (stopped without a
- * result). After a terminal event or [VoiceEngine.cancelListening] the engine must not send
- * further events for that session.
+ * result). After a terminal event, or as soon as [VoiceEngine.cancelListening] or
+ * [VoiceEngine.startListening] returns, the engine must not send further events for the previous
+ * session: it invalidates that session synchronously, even when the platform work is deferred
+ * (callbacks already queued on the main thread are dropped).
  */
 public interface VoiceEngineListener {
     public fun onListeningStarted() {}
@@ -60,7 +62,7 @@ public interface VoiceEngine {
     /** Stop recording and deliver the final result as soon as possible. */
     public fun stopListening()
 
-    /** Stop without a result. */
+    /** Stop without a result. Invalidates the session synchronously: no events for it after this returns. */
     public fun cancelListening()
     public fun speak(text: String, utteranceId: String, languageTag: String)
     public fun stopSpeaking()

@@ -112,38 +112,43 @@ public class IosVoiceEngine(
     override fun startListening(languageTag: String): Unit = startListening(languageTag, ListenMode.COMMAND)
 
     override fun startListening(languageTag: String, mode: ListenMode) {
+        // Invalidate the previous session synchronously; begin() only runs if no newer
+        // start/cancel happened while waiting for the permission callbacks.
+        sessionActive = false
+        val token = ++sessionId
         scope.launch {
             when (SFSpeechRecognizer.authorizationStatus()) {
                 SFSpeechRecognizerAuthorizationStatus.SFSpeechRecognizerAuthorizationStatusAuthorized ->
-                    requestMicrophoneThenBegin(languageTag, mode)
+                    requestMicrophoneThenBegin(languageTag, mode, token)
                 SFSpeechRecognizerAuthorizationStatus.SFSpeechRecognizerAuthorizationStatusNotDetermined ->
                     SFSpeechRecognizer.requestAuthorization { status ->
                         scope.launch {
                             if (status == SFSpeechRecognizerAuthorizationStatus.SFSpeechRecognizerAuthorizationStatusAuthorized) {
-                                requestMicrophoneThenBegin(languageTag, mode)
+                                requestMicrophoneThenBegin(languageTag, mode, token)
                             } else {
-                                listener?.onListeningError(VoiceError.PERMISSION_DENIED)
+                                permissionDenied(token)
                             }
                         }
                     }
-                else -> listener?.onListeningError(VoiceError.PERMISSION_DENIED)
+                else -> permissionDenied(token)
             }
         }
     }
 
-    private fun requestMicrophoneThenBegin(languageTag: String, mode: ListenMode) {
+    private fun permissionDenied(token: Int) {
+        if (token == sessionId) listener?.onListeningError(VoiceError.PERMISSION_DENIED)
+    }
+
+    private fun requestMicrophoneThenBegin(languageTag: String, mode: ListenMode, token: Int) {
         AVAudioSession.sharedInstance().requestRecordPermission { granted ->
             scope.launch {
-                if (granted) begin(languageTag, mode) else listener?.onListeningError(VoiceError.PERMISSION_DENIED)
+                if (granted) begin(languageTag, mode, token) else permissionDenied(token)
             }
         }
     }
 
-    private fun begin(languageTag: String, mode: ListenMode) {
-        // Invalidate the previous session first so none of its callbacks (e.g. a wake session's)
-        // can reach this one, even on the early-return error paths below.
-        sessionActive = false
-        sessionId++
+    private fun begin(languageTag: String, mode: ListenMode, token: Int) {
+        if (token != sessionId) return // cancelled or superseded while waiting for permissions
         lastPartial = ""
         teardownAudio()
         val wake = mode == ListenMode.WAKE
@@ -269,11 +274,10 @@ public class IosVoiceEngine(
     }
 
     override fun cancelListening() {
-        scope.launch {
-            sessionActive = false
-            sessionId++
-            teardownAudio()
-        }
+        // Synchronous (see the VoiceEngineListener contract); only the audio teardown is deferred.
+        sessionActive = false
+        sessionId++
+        scope.launch { teardownAudio() }
     }
 
     private fun soundLevel(buffer: AVAudioPCMBuffer): Float {
