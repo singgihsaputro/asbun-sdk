@@ -12,10 +12,10 @@ actual fun formatClock(epochMillis: Long): String =
 actual val platformName: String
     get() = "Android ${android.os.Build.VERSION.RELEASE ?: ""}".trim()
 
+private val wakeTone by lazy { android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 80) }
+
 actual fun playWakeTone() {
-    val tone = android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 80)
-    tone.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 150)
-    // ponytail: leaks a native handle if never released; release after the tone when called often
+    wakeTone.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 150)
 }
 
 @androidx.compose.runtime.Composable

@@ -75,6 +75,7 @@ class DriverController(
     private val _location = MutableStateFlow(DriverLocation(START_POSITION))
     val location: StateFlow<DriverLocation> = _location.asStateFlow()
 
+    private var foreground = true
     private var dispatchJob: Job? = null
     private var offerTimerJob: Job? = null
     private var moveJob: Job? = null
@@ -131,8 +132,6 @@ class DriverController(
         this.foreground = foreground
         syncWakeWord()
     }
-
-    private var foreground = true
 
     private fun syncWakeWord() {
         val s = _state.value
