@@ -11,7 +11,8 @@ class WakeWordMatchTest {
     @Test fun phraseAlone() = assertEquals("", m.wakeRemainder("Halo Mitra", phrases))
     @Test fun phraseThenCommandKeepsOriginalWords() =
         assertEquals("Terima order", m.wakeRemainder("Halo Mitra, Terima order", phrases))
-    @Test fun oneLetterOffStillMatches() = assertEquals("terima", m.wakeRemainder("alo mitra terima", phrases))
+    @Test fun oneLetterOffStillMatches() = assertEquals("terima", m.wakeRemainder("halo mitri terima", phrases))
+    @Test fun shortWordsNeedExactMatch() = assertNull(m.wakeRemainder("hal mitra terima", phrases))
     @Test fun phraseMustStartTheText() = assertNull(m.wakeRemainder("tolong halo mitra terima", phrases))
     @Test fun chatterIsIgnored() = assertNull(m.wakeRemainder("iya bu sebentar lagi sampai", phrases))
     @Test fun partialPhraseIsNotEnough() = assertNull(m.wakeRemainder("halo", phrases))

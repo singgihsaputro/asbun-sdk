@@ -165,6 +165,8 @@ public class VoiceSdk(
     private var wakeEnabled = false
     private var wakeRestartJob: Job? = null
     private var wakeBackoffMs = WAKE_BACKOFF_START_MS
+    /** Mic denial already told to the app; wake retries stay quiet until the mic works again. */
+    private var micDeniedReported = false
 
     private val listener = object : VoiceEngineListener {
         override fun onListeningStarted() {
@@ -417,7 +419,13 @@ public class VoiceSdk(
 
     private fun tryStartWake() {
         if (!wakeEnabled || wakeOpen || _state.value.wakeUnavailable != null || phase != VoicePhase.IDLE) return
-        if (queue.isNotEmpty() || currentUtteranceId != null || pendingInput != null || pendingConfirm != null) return
+        if (queue.isNotEmpty() || currentUtteranceId != null) return
+        if (pendingInput != null || pendingConfirm != null) {
+            // Idle with no answer being listened for: the question was abandoned (e.g. cancelListening).
+            pendingInput = null
+            pendingConfirm = null
+            updateAwaiting()
+        }
         if (!engine.isWakeListeningAvailable) {
             update { it.copy(wakeUnavailable = WakeUnavailableReason.NO_ON_DEVICE_RECOGNITION) }
             return
@@ -443,6 +451,7 @@ public class VoiceSdk(
         if (remainders.isEmpty()) return endWakeSession(null)
         update { it.copy(wakeListening = false) }
         wakeBackoffMs = WAKE_BACKOFF_START_MS
+        micDeniedReported = false
         val commands = remainders.filter { it.isNotBlank() }
         emit(VoiceEvent.WakeDetected(commandFollows = commands.isNotEmpty()))
         reprompts = 0
@@ -455,11 +464,13 @@ public class VoiceSdk(
         when (error) {
             null, VoiceError.NO_MATCH -> {
                 wakeBackoffMs = WAKE_BACKOFF_START_MS
+                micDeniedReported = false
                 restartWakeAfter(WAKE_RESTART_MS)
             }
             VoiceError.PERMISSION_DENIED -> {
                 update { it.copy(wakeUnavailable = WakeUnavailableReason.PERMISSION_DENIED) }
-                emit(VoiceEvent.Error(VoiceErrorCode.PERMISSION_DENIED, "Wake word: microphone permission denied"))
+                if (!micDeniedReported) emit(VoiceEvent.Error(VoiceErrorCode.PERMISSION_DENIED, "Wake word: microphone permission denied"))
+                micDeniedReported = true
             }
             VoiceError.NOT_AVAILABLE -> {
                 update { it.copy(wakeUnavailable = WakeUnavailableReason.NO_ON_DEVICE_RECOGNITION) }
@@ -502,6 +513,7 @@ public class VoiceSdk(
             ask(render(config.messages.noSpeech))
             return
         }
+        if (error == VoiceError.PERMISSION_DENIED) micDeniedReported = true
         if (listeningPrompted) {
             pendingInput = null
             pendingConfirm = null

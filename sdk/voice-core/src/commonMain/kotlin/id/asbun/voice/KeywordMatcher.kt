@@ -154,7 +154,7 @@ public class KeywordMatcher(
     }
 
     /**
-     * Wake-word check: null unless a phrase (each word exact or one letter off) starts [text];
+     * Wake-word check: null unless a phrase (each word exact, or one letter off when 5+ letters) starts [text];
      * otherwise the words after it as spoken, "" when nothing follows. Fillers are kept on purpose.
      */
     internal fun wakeRemainder(text: String, phrases: List<String>): String? {
@@ -162,7 +162,7 @@ public class KeywordMatcher(
         for (phrase in phrases) {
             val words = normalizer.words(phrase)
             if (words.isEmpty() || tokens.size < words.size) continue
-            if (words.indices.all { tokens[it].canon == words[it] || withinOneEdit(tokens[it].canon, words[it]) }) {
+            if (words.indices.all { tokens[it].canon == words[it] || (words[it].length >= 5 && withinOneEdit(tokens[it].canon, words[it])) }) {
                 return tokens.drop(words.size).joinToString(" ") { it.original }.trimStart(',', '.', '!', '?', ' ')
             }
         }
