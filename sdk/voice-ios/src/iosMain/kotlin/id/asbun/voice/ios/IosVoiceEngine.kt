@@ -1,5 +1,6 @@
 package id.asbun.voice.ios
 
+import id.asbun.voice.ListenMode
 import id.asbun.voice.VoiceEngine
 import id.asbun.voice.VoiceEngineListener
 import id.asbun.voice.VoiceError
@@ -77,6 +78,9 @@ public class IosVoiceEngine(
     override val isRecognitionAvailable: Boolean
         get() = recognizerFor(recognizerTag ?: defaultLanguageTag)?.isAvailable() == true
 
+    override val isWakeListeningAvailable: Boolean
+        get() = recognizerFor(recognizerTag ?: defaultLanguageTag)?.supportsOnDeviceRecognition == true
+
     private fun recognizerFor(tag: String): SFSpeechRecognizer? {
         if (recognizer == null || recognizerTag != tag) {
             // initWithLocale: returns nil for an unsupported language, so check first and
@@ -105,16 +109,18 @@ public class IosVoiceEngine(
 
     // ------------------------------------------------------------------ STT
 
-    override fun startListening(languageTag: String) {
+    override fun startListening(languageTag: String): Unit = startListening(languageTag, ListenMode.COMMAND)
+
+    override fun startListening(languageTag: String, mode: ListenMode) {
         scope.launch {
             when (SFSpeechRecognizer.authorizationStatus()) {
                 SFSpeechRecognizerAuthorizationStatus.SFSpeechRecognizerAuthorizationStatusAuthorized ->
-                    requestMicrophoneThenBegin(languageTag)
+                    requestMicrophoneThenBegin(languageTag, mode)
                 SFSpeechRecognizerAuthorizationStatus.SFSpeechRecognizerAuthorizationStatusNotDetermined ->
                     SFSpeechRecognizer.requestAuthorization { status ->
                         scope.launch {
                             if (status == SFSpeechRecognizerAuthorizationStatus.SFSpeechRecognizerAuthorizationStatusAuthorized) {
-                                requestMicrophoneThenBegin(languageTag)
+                                requestMicrophoneThenBegin(languageTag, mode)
                             } else {
                                 listener?.onListeningError(VoiceError.PERMISSION_DENIED)
                             }
@@ -125,18 +131,24 @@ public class IosVoiceEngine(
         }
     }
 
-    private fun requestMicrophoneThenBegin(languageTag: String) {
+    private fun requestMicrophoneThenBegin(languageTag: String, mode: ListenMode) {
         AVAudioSession.sharedInstance().requestRecordPermission { granted ->
             scope.launch {
-                if (granted) begin(languageTag) else listener?.onListeningError(VoiceError.PERMISSION_DENIED)
+                if (granted) begin(languageTag, mode) else listener?.onListeningError(VoiceError.PERMISSION_DENIED)
             }
         }
     }
 
-    private fun begin(languageTag: String) {
+    private fun begin(languageTag: String, mode: ListenMode) {
+        // Invalidate the previous session first so none of its callbacks (e.g. a wake session's)
+        // can reach this one, even on the early-return error paths below.
+        sessionActive = false
+        sessionId++
+        lastPartial = ""
         teardownAudio()
+        val wake = mode == ListenMode.WAKE
         val rec = recognizerFor(languageTag)
-        if (rec == null || !rec.isAvailable()) {
+        if (rec == null || !rec.isAvailable() || (wake && !rec.supportsOnDeviceRecognition)) {
             listener?.onListeningError(VoiceError.NOT_AVAILABLE)
             return
         }
@@ -145,6 +157,7 @@ public class IosVoiceEngine(
 
         val req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
+        if (wake) req.requiresOnDeviceRecognition = true
         request = req
 
         val input = audioEngine.inputNode
@@ -154,7 +167,7 @@ public class IosVoiceEngine(
             return
         }
 
-        val myId = ++sessionId
+        val myId = sessionId
         input.removeTapOnBus(0u)
         input.installTapOnBus(0u, bufferSize = 1024u, format = format) { buffer, _ ->
             if (buffer != null) {
@@ -199,8 +212,8 @@ public class IosVoiceEngine(
                 }
             }
         }
-        // No speech at all within listenTimeoutMs -> treat as no utterance.
-        scheduleEndOfSpeech(myId, listenTimeoutMs)
+        // No speech at all within listenTimeoutMs (WAKE_SESSION_MS in wake mode) -> treat as no utterance.
+        scheduleEndOfSpeech(myId, if (wake) WAKE_SESSION_MS else listenTimeoutMs)
     }
 
     /** iOS does not stop when the user goes quiet, so detect the pause and ask for the final result. */
@@ -316,6 +329,11 @@ public class IosVoiceEngine(
         val entry = utteranceIds.firstOrNull { it.first === utterance } ?: return
         utteranceIds.remove(entry)
         scope.launch { listener?.onSpeakingDone(entry.second) }
+    }
+
+    private companion object {
+        /** Wake session no-speech window; stays under the ~1 minute recognition task limit. */
+        const val WAKE_SESSION_MS = 50_000L
     }
 }
 
