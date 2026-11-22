@@ -7,6 +7,7 @@ import id.asbun.voice.VoiceContext
 import id.asbun.voice.VoiceErrorCode
 import id.asbun.voice.VoiceEvent
 import id.asbun.voice.VoiceSdk
+import id.asbun.voice.WakeUnavailableReason
 import id.ojolmitra.driver.epochMillis
 import id.ojolmitra.driver.playWakeTone
 import id.ojolmitra.driver.formatClock
@@ -76,6 +77,8 @@ class DriverController(
     val location: StateFlow<DriverLocation> = _location.asStateFlow()
 
     private var foreground = true
+    /** The "Halo Mitra unavailable" warning is shown once per app run. */
+    private var wakeWarned = false
     private var dispatchJob: Job? = null
     private var offerTimerJob: Job? = null
     private var moveJob: Job? = null
@@ -88,6 +91,14 @@ class DriverController(
     init {
         voice.onDeeplink(::route)
         registerVoiceHandlers()
+        scope.launch {
+            voice.state.collect {
+                if (!wakeWarned && it.wakeUnavailable == WakeUnavailableReason.NO_ON_DEVICE_RECOGNITION) {
+                    wakeWarned = true
+                    toast(OjolMitraVoice.WAKE_UNAVAILABLE_WARNING)
+                }
+            }
+        }
         voice.addEventListener { event ->
             if (event is VoiceEvent.Error && event.code == VoiceErrorCode.PERMISSION_DENIED) {
                 toast("Izinkan akses mikrofon & pengenalan suara di Pengaturan")

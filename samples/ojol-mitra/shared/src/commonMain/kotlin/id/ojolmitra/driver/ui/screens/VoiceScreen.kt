@@ -124,8 +124,10 @@ fun VoiceScreen(
                         WakeUnavailableReason.PERMISSION_DENIED -> "Tidak tersedia: izin mikrofon belum diberikan."
                         else -> "Ucapkan “Halo Mitra” lalu perintahnya, tanpa menyentuh HP."
                     },
-                    state.wakeWord,
-                    onWakeWord,
+                    // No offline Indonesian on this phone: shown off and greyed out until it is installed.
+                    checked = state.wakeWord && voice.wakeUnavailable != WakeUnavailableReason.NO_ON_DEVICE_RECOGNITION,
+                    onChange = onWakeWord,
+                    enabled = voice.wakeUnavailable != WakeUnavailableReason.NO_ON_DEVICE_RECOGNITION,
                 )
                 HorizontalDivider(color = Ojol.Divider)
                 SettingRow("Bacakan pesan customer", "Pesan masuk dibacakan otomatis saat hands-free aktif.", state.readMessagesAloud, onReadAloud)
@@ -171,7 +173,7 @@ fun VoiceScreen(
 }
 
 @Composable
-private fun SettingRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun SettingRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit, enabled: Boolean = true) {
     Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.titleSmall)
@@ -181,6 +183,7 @@ private fun SettingRow(title: String, subtitle: String, checked: Boolean, onChan
         Switch(
             checked = checked,
             onCheckedChange = onChange,
+            enabled = enabled,
             colors = SwitchDefaults.colors(checkedTrackColor = Ojol.Green, checkedThumbColor = Color.White),
         )
     }

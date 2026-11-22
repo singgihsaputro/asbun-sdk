@@ -173,6 +173,21 @@ class DriverControllerTest {
     }
 
     @Test
+    fun unavailableWakeWordWarnsOnce() = runTest {
+        val engine = FakeVoiceEngine().apply { wakeAvailable = false }
+        val c = newController(engine)
+        c.setOnline(true)
+        runCurrent()
+        assertFalse(c.voice.state.value.wakeListening)
+        val warning = assertNotNull(c.state.value.snackbar)
+        assertEquals(OjolMitraVoice.WAKE_UNAVAILABLE_WARNING, warning.text)
+        c.setAppForeground(false)
+        c.setAppForeground(true)
+        runCurrent()
+        assertEquals(warning.id, c.state.value.snackbar?.id, "warned again")
+    }
+
+    @Test
     fun wakePhraseRunsCommandAndOpensPanel() = runTest {
         val engine = FakeVoiceEngine()
         val c = newController(engine)

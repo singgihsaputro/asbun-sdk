@@ -28,6 +28,10 @@ object OjolMitraVoice {
     /** Chat screen mic: whatever the driver says is the message. */
     const val SCREEN_DICTATION = "dictation"
 
+    /** Shown once when "Halo Mitra" cannot run because the phone has no offline Indonesian recognition. */
+    const val WAKE_UNAVAILABLE_WARNING =
+        "“Halo Mitra” tidak aktif: unduh bahasa Indonesia untuk pengenalan suara offline di pengaturan HP."
+
     val manifest: CommandManifest by lazy { CommandManifest.fromJson(MANIFEST_JSON) }
 
     /**
