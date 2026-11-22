@@ -128,7 +128,7 @@ Version 1 turns the Ojol Mitra voice layer into a product any app can configure 
 
 **Non-goals for v1**
 
-- No own speech model. The wake word reuses the platform recognizer on-device (see Wake word).
+- No own speech model. The wake word reuses the platform recognizer, offline only (see Wake word).
 - No hosted backend: the app owner provides the LLM endpoint or a proxy.
 - No UI: the SDK emits events and the app draws its own voice panel. The Ojol Mitra panel can serve as a sample.
 - No analytics collection by the SDK.
@@ -483,14 +483,14 @@ A Kotlin Multiplatform app can call the common API directly from shared code, as
 
 #### Wake word
 
-Set `VoiceConfig(wakeWord = WakeWordConfig(listOf("halo mitra")))` (code only, not read from JSON) and call `setWakeWord(true)` while the app wants hands-free calling, e.g. online and in the foreground. While the SDK is idle it keeps a `ListenMode.WAKE` session open on the platform recognizer, on-device only. The phrase must start the transcript; each phrase word may be one letter off when it has 5+ letters, and manifest `aliases` cover other spellings.
+Set `VoiceConfig(wakeWord = WakeWordConfig(listOf("halo mitra")))` (code only, not read from JSON) and call `setWakeWord(true)` while the app wants hands-free calling, e.g. online and in the foreground. While the SDK is idle it keeps a `ListenMode.WAKE` session open on the platform recognizer, offline only. Android (13+) uses the default recognizer with `EXTRA_PREFER_OFFLINE` and first confirms with `checkRecognitionSupport` that the language is installed offline; iOS uses `requiresOnDeviceRecognition`. The phrase must start the transcript; each phrase word may be one letter off when it has 5+ letters, and manifest `aliases` cover other spellings. Recognizers sometimes merge the phrase into one word ("alomitra"), so it is also compared with spaces removed: 1 letter off, 2 for phrases of 8+ letters. Close-sounding real words keep their own word count and are not widened ("kalau mitra" does not wake).
 
 - `WakeDetected(commandFollows)` fires once on the final transcript. Only the words after the phrase continue as a normal command (`Final`, matching, LLM); with nothing after it, the SDK listens for the command.
 - Text heard before or without the phrase never appears in `Partial`/`Final`, `partialText`/`lastHeard`, logs or LLM calls; chatter restarts the session quietly.
 - `VoiceState.wakeListening` is true while a wake session is open (phase stays `IDLE`). `VoiceState.wakeUnavailable` says why it is off although enabled: `NOT_CONFIGURED`, `NO_ON_DEVICE_RECOGNITION` (no cloud fallback) or `PERMISSION_DENIED` (wake sessions never ask for the mic; a command session does). `setWakeWord(true)` retries.
 - Speaking, listening for a command, processing or an open question pause it; it resumes when the SDK is idle again.
 
-Custom `VoiceEngine`s: wake sessions arrive as `startListening(languageTag, ListenMode.WAKE)` and must stay on-device. Report `isWakeListeningAvailable = true` only if the engine overrides that two-argument `startListening`; the default forwards to the command overload. `cancelListening()` and `startListening(...)` invalidate the previous session synchronously: no events from it afterwards, even ones already queued.
+Custom `VoiceEngine`s: wake sessions arrive as `startListening(languageTag, ListenMode.WAKE)` and must stay offline. Report `isWakeListeningAvailable = true` only if the engine overrides that two-argument `startListening`; the default forwards to the command overload. `cancelListening()` and `startListening(...)` invalidate the previous session synchronously: no events from it afterwards, even ones already queued.
 
 ### Security, privacy and cost
 
@@ -552,5 +552,5 @@ These decisions change the build plan or the cost and should be settled before p
 - [ ] Which languages ship in 1.0 besides Indonesian?
 - [ ] May the SDK open deeplinks into other apps, or only into the host app?
 - [ ] Public distribution (Maven Central, public Swift package) or private (GitHub Packages, private repo)?
-- [x] Is a wake word required for 1.0? Built as a quiet on-device recognizer loop (approach C in the wake-word spec); keeping it for 1.0 depends on the car evaluation.
+- [x] Is a wake word required for 1.0? Built as a quiet offline recognizer loop (approach C in the wake-word spec); keeping it for 1.0 depends on the car evaluation.
 - [ ] What consent text and retention rules apply to transcripts sent to the LLM?

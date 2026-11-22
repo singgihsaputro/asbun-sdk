@@ -201,7 +201,7 @@ Going offline is refused while a trip is active. Autobid accepts an offer 1.5 s 
 
 ## Voice command reference
 
-Commands are spoken in Indonesian. The microphone turns on when the driver taps a mic button, or automatically in hands-free mode (new order, a question from the assistant, arrival at pickup or destination). With the "Panggil dengan Halo Mitra" setting on, saying "Halo Mitra" (alone, or followed by the command) also starts a command while the app is online and in the foreground. It needs the phone's on-device Indonesian recognition (Android 12+ or iOS on-device mode); without it the setting shows why it is unavailable.
+Commands are spoken in Indonesian. The microphone turns on when the driver taps a mic button, or automatically in hands-free mode (new order, a question from the assistant, arrival at pickup or destination). With the "Panggil dengan Halo Mitra" setting on, saying "Halo Mitra" (alone, or followed by the command) also starts a command while the app is online and in the foreground. It needs Indonesian installed for offline speech recognition (Android 13+, or iOS on-device mode); without it the setting is switched off and shows why, and the app warns once.
 
 | Intent | Example phrases | Works when | Result |
 | --- | --- | --- | --- |
@@ -344,7 +344,7 @@ Limitations of the prototype:
 
 - Orders, customers, chat replies and other drivers' reports are simulated on the device. There is no backend, login or payment.
 - The map is a fictional street grid, not GPS or real roads. Calls and navigation are simulated.
-- The "Halo Mitra" wake word restarts the phone's on-device recognizer in a quiet loop. Google's docs say `SpeechRecognizer` is not meant for continuous listening, so battery, beeps and gaps are still to be evaluated in a car; a dedicated wake-word model replaces the loop if it fails.
+- The "Halo Mitra" wake word restarts the phone's speech recognizer, offline only, in a quiet loop. Google's docs say `SpeechRecognizer` is not meant for continuous listening, so battery, beeps and gaps are still to be evaluated in a car; a dedicated wake-word model replaces the loop if it fails.
 - Without an LLM configured, phrasing outside the manifest gets "perintah belum dikenali" (command not recognized).
 - State is not saved: earnings and history reset when the app restarts.
 
