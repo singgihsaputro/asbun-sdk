@@ -1,5 +1,8 @@
 package id.ojolmitra.driver
 
+import platform.Foundation.NSCalendar
+import platform.Foundation.NSCalendarUnitHour
+import platform.Foundation.NSCalendarUnitMinute
 import platform.Foundation.NSDate
 import platform.Foundation.NSDateFormatter
 import platform.Foundation.dateWithTimeIntervalSince1970
@@ -12,6 +15,12 @@ actual fun formatClock(epochMillis: Long): String {
     val formatter = NSDateFormatter()
     formatter.dateFormat = "HH:mm"
     return formatter.stringFromDate(NSDate.dateWithTimeIntervalSince1970(epochMillis / 1000.0))
+}
+
+actual fun localMinuteOfDay(epochMillis: Long): Int {
+    val date = NSDate.dateWithTimeIntervalSince1970(epochMillis / 1000.0)
+    val parts = NSCalendar.currentCalendar.components(NSCalendarUnitHour or NSCalendarUnitMinute, fromDate = date)
+    return (parts.hour * 60 + parts.minute).toInt()
 }
 
 actual val platformName: String

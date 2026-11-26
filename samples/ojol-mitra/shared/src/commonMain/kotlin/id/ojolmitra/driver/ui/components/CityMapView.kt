@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -41,6 +42,7 @@ import androidx.compose.ui.unit.sp
 import id.ojolmitra.driver.core.DriverLocation
 import id.ojolmitra.driver.map.CityMap
 import id.ojolmitra.driver.map.MapPoint
+import id.ojolmitra.driver.model.Hotspot
 import id.ojolmitra.driver.model.Severity
 import id.ojolmitra.driver.model.TrafficReport
 import id.ojolmitra.driver.model.TrafficType
@@ -54,6 +56,7 @@ import kotlin.math.min
  *
  * @param overview jika tidak null, kamera menampilkan semua titik ini (preview order);
  *                 jika null kamera mengikuti driver.
+ * @param hotspots area ramai yang digambar sebagai heat map, bernomor sesuai urutan daftar.
  */
 @Composable
 fun CityMapView(
@@ -69,6 +72,7 @@ fun CityMapView(
     zoom: Float = 1f,
     topInset: Dp = 0.dp,
     bottomInset: Dp = 0.dp,
+    hotspots: List<Hotspot> = emptyList(),
 ) {
     val measurer = rememberTextMeasurer(cacheSize = 96)
     val labels = remember(measurer) { MapLabels(measurer) }
@@ -113,11 +117,13 @@ fun CityMapView(
             val cam = Camera(center, scale, Offset(size.width / 2f, topPx + visibleH / 2f))
             drawBase(cam)
             drawTraffic(cam, reports)
+            if (hotspots.isNotEmpty()) drawHeat(cam, hotspots, pulse)
             if (previewPickupLeg.size > 1) drawRoute(cam, previewPickupLeg, Ojol.GreenDark, dashed = true)
             if (previewTripLeg.size > 1) drawRoute(cam, previewTripLeg, Ojol.Green, dashed = false)
             if (location.remainingRoute.size > 1) drawRoute(cam, location.remainingRoute, Ojol.Green, dashed = false)
             drawLabels(cam, labels)
             drawReports(cam, reports, labels, pulse)
+            if (hotspots.isNotEmpty()) drawHotspotBadges(cam, hotspots, labels)
             pickup?.let { drawPin(cam.toScreen(it), Ojol.Green) }
             dropoff?.let { drawPin(cam.toScreen(it), Ojol.Orange) }
             drawDriver(cam.toScreen(location.position), location.heading, online, pulse)
@@ -141,6 +147,9 @@ private class MapLabels(measurer: androidx.compose.ui.text.TextMeasurer) {
     val parks: List<TextLayoutResult> = CityMap.parks.map { measurer.measure(it.name, parkStyle) }
     val places: List<TextLayoutResult> = CityMap.places.map { measurer.measure(it.name, placeStyle) }
     val emoji: Map<TrafficType, TextLayoutResult> = TrafficType.entries.associateWith { measurer.measure(it.emoji, emojiStyle) }
+    val numbers: List<TextLayoutResult> = (1..9).map {
+        measurer.measure("$it", TextStyle(fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold))
+    }
 }
 
 private fun DrawScope.drawBase(cam: Camera) {
@@ -225,6 +234,60 @@ private fun DrawScope.drawTraffic(cam: Camera, reports: List<TrafficReport>) {
             cap = StrokeCap.Round,
             pathEffect = if (r.type == TrafficType.DITUTUP) PathEffect.dashPathEffect(floatArrayOf(14f, 10f)) else null,
         )
+    }
+}
+
+/**
+ * Heat map: gradasi hangat di tiap area ramai. Makin banyak calon penumpang per driver,
+ * makin besar dan makin merah; yang sedang berlangsung berdenyut pelan.
+ */
+private fun DrawScope.drawHeat(cam: Camera, hotspots: List<Hotspot>, pulse: Float) {
+    hotspots.sortedBy { it.heat }.forEach { spot ->
+        val o = cam.toScreen(spot.position)
+        val breathe = if (spot.ongoing) 1f + 0.06f * kotlin.math.sin(pulse * 2f * kotlin.math.PI.toFloat()) else 1f
+        val radius = (120f + 150f * spot.heat) * cam.scale * breathe
+        val core = heatColor(spot.heat)
+        drawCircle(
+            Brush.radialGradient(
+                0f to core.copy(alpha = if (spot.ongoing) 0.62f else 0.42f),
+                0.45f to core.copy(alpha = if (spot.ongoing) 0.32f else 0.2f),
+                1f to core.copy(alpha = 0f),
+                center = o,
+                radius = radius,
+            ),
+            radius = radius,
+            center = o,
+        )
+    }
+}
+
+/** Kuning (lumayan) -> oranye -> merah (sangat ramai). */
+private fun heatColor(heat: Float): Color {
+    val yellow = Color(0xFFFFC107)
+    val orange = Color(0xFFFF7A1A)
+    val red = Color(0xFFE53935)
+    return if (heat < 0.6f) lerp(yellow, orange, ((heat - 0.25f) / 0.35f).coerceIn(0f, 1f))
+    else lerp(orange, red, ((heat - 0.6f) / 0.4f).coerceIn(0f, 1f))
+}
+
+private fun lerp(a: Color, b: Color, t: Float) = Color(
+    red = a.red + (b.red - a.red) * t,
+    green = a.green + (b.green - a.green) * t,
+    blue = a.blue + (b.blue - a.blue) * t,
+    alpha = 1f,
+)
+
+/** Lingkaran bernomor 1, 2, 3, ... sama dengan nomor di daftar dan yang dibacakan asisten. */
+private fun DrawScope.drawHotspotBadges(cam: Camera, hotspots: List<Hotspot>, labels: MapLabels) {
+    hotspots.forEachIndexed { i, spot ->
+        if (i >= labels.numbers.size) return
+        val o = cam.toScreen(spot.position)
+        val r = 11.dp.toPx()
+        drawCircle(Color.Black.copy(alpha = 0.18f), radius = r + 1.dp.toPx(), center = o + Offset(0f, 1.5.dp.toPx()))
+        drawCircle(Color.White, radius = r + 2.dp.toPx(), center = o)
+        drawCircle(spot.level.color(), radius = r, center = o)
+        val n = labels.numbers[i]
+        drawText(n, topLeft = Offset(o.x - n.size.width / 2f, o.y - n.size.height / 2f))
     }
 }
 

@@ -6,11 +6,13 @@ import id.ojolmitra.driver.model.ChatMessage
 import id.ojolmitra.driver.model.CompletedTrip
 import id.ojolmitra.driver.model.DriverProfile
 import id.ojolmitra.driver.model.Earnings
+import id.ojolmitra.driver.model.Hotspot
 import id.ojolmitra.driver.model.OrderOffer
 import id.ojolmitra.driver.model.TrafficReport
 
 enum class HomeTab(val label: String) {
     BERANDA("Beranda"),
+    AREA_RAMAI("Area Ramai"),
     PENDAPATAN("Pendapatan"),
     LALU_LINTAS("Lalu Lintas"),
     SUARA("Asisten Suara"),
@@ -40,6 +42,10 @@ data class DriverUiState(
     val chat: List<ChatMessage> = emptyList(),
     val unreadChat: Int = 0,
     val reports: List<TrafficReport> = emptyList(),
+    /** Perkiraan area ramai terdekat (halaman Area Ramai), urut dari yang terdekat. */
+    val hotspots: List<Hotspot> = emptyList(),
+    /** Jam lokal (menit sejak tengah malam) saat [hotspots] dihitung. */
+    val hotspotsAtMinute: Int = 0,
     val earnings: Earnings = Earnings(),
     val completedTrips: List<CompletedTrip> = emptyList(),
     /** Ringkasan order yang baru selesai (ditampilkan sebagai dialog). */

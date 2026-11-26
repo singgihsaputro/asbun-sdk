@@ -1,6 +1,7 @@
 package id.ojolmitra.driver
 
 import id.ojolmitra.driver.core.DriverController
+import id.ojolmitra.driver.core.HomeTab
 import id.ojolmitra.driver.core.SimTiming
 import id.ojolmitra.driver.map.CityMap
 import id.ojolmitra.driver.model.TrafficType
@@ -11,6 +12,7 @@ import id.asbun.voice.VoiceError
 import id.asbun.voice.VoiceSdk
 import id.ojolmitra.driver.voice.ListenContext
 import id.ojolmitra.driver.voice.OjolMitraVoice
+import id.ojolmitra.driver.voice.Speech
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
@@ -80,6 +82,7 @@ class DriverControllerTest {
             timing,
             clock = { 1_763_000_000_000L },
             ambientSimulation = false,
+            timeOfDay = { 17 * 60 + 40 },
         )
 
     private fun TestScope.waitForOffer(controller: DriverController) {
@@ -293,6 +296,76 @@ class DriverControllerTest {
         runCurrent()
         assertNotNull(c.state.value.trip)
         assertTrue(engine.spoken.any { it.startsWith("Autobid") })
+    }
+
+    @Test
+    fun busyAreaTabIsReadAloudInHandsFree() = runTest {
+        val engine = FakeVoiceEngine()
+        val c = newController(engine)
+        c.selectTab(HomeTab.AREA_RAMAI)
+        val spots = c.state.value.hotspots
+        assertTrue(spots.size >= 4)
+        assertEquals(17 * 60 + 40, c.state.value.hotspotsAtMinute)
+        assertEquals(OjolMitraVoice.SCREEN_HEATMAP, c.voice.currentContext.screen)
+        assertEquals(Speech.hotspotList(spots), engine.spoken.last())
+
+        c.readHotspotAloud(1) // tombol speaker di kartu nomor 2
+        assertEquals(Speech.hotspotDetail(spots[1], 2), engine.spoken.last())
+
+        c.selectTab(HomeTab.PENDAPATAN)
+        assertEquals(OjolMitraVoice.SCREEN_HOME, c.voice.currentContext.screen)
+        val said = engine.spoken.size
+        c.selectTab(HomeTab.AREA_RAMAI)
+        c.selectTab(HomeTab.AREA_RAMAI) // tab yang sama: tidak dibacakan dua kali
+        assertEquals(said + 1, engine.spoken.size)
+    }
+
+    @Test
+    fun busyAreaTabStaysQuietWithoutHandsFree() = runTest {
+        val engine = FakeVoiceEngine()
+        val c = newController(engine)
+        c.setHandsFree(false)
+        c.selectTab(HomeTab.AREA_RAMAI)
+        assertTrue(c.state.value.hotspots.isNotEmpty())
+        assertTrue(engine.spoken.isEmpty())
+        c.readHotspotsAloud()
+        assertTrue(engine.spoken.single().startsWith("Ada "))
+    }
+
+    @Test
+    fun busyAreasByVoiceWithNextDetailAndEvents() = runTest {
+        val engine = FakeVoiceEngine()
+        val c = newController(engine)
+        c.speakCommand(engine, "mana yang rame")
+        assertEquals(HomeTab.AREA_RAMAI, c.state.value.tab)
+        val spots = c.state.value.hotspots
+        assertEquals(Speech.hotspotList(spots), c.lastResponse())
+
+        c.speakCommand(engine, "berikutnya")
+        assertTrue(c.lastResponse().startsWith("Berikutnya: Nomor 4, "), c.lastResponse())
+
+        c.speakCommand(engine, "detail nomor 2")
+        assertEquals(Speech.hotspotDetail(spots[1], 2), c.lastResponse())
+
+        c.speakCommand(engine, "ada acara apa")
+        assertEquals(Speech.hotspotEvents(c.state.value.hotspots), c.lastResponse())
+
+        c.speakCommand(engine, "bantuan")
+        assertTrue(c.lastResponse().startsWith("Di halaman area ramai"), c.lastResponse())
+    }
+
+    @Test
+    fun busyAreasDuringATripAnswerWithoutLeavingTheTrip() = runTest {
+        val engine = FakeVoiceEngine()
+        val c = newController(engine)
+        c.setOnline(true)
+        waitForOffer(c)
+        c.acceptOffer()
+        c.speakCommand(engine, "area ramai")
+        assertNotNull(c.state.value.trip)
+        assertEquals(OjolMitraVoice.SCREEN_TRIP, c.voice.currentContext.screen)
+        assertTrue(c.lastResponse().startsWith("Ada "), c.lastResponse())
+        assertTrue(c.voicePanel.state.value.log.first().success)
     }
 
     @Test

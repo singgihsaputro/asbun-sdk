@@ -1,6 +1,8 @@
 package id.ojolmitra.driver.android
 
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -14,6 +16,9 @@ import id.asbun.voice.VoiceEngine
 import id.asbun.voice.VoiceEngineListener
 import id.asbun.voice.VoiceSdk
 import id.ojolmitra.driver.App
+import id.ojolmitra.driver.core.DriverController
+import id.ojolmitra.driver.ui.screens.DriverApp
+import id.ojolmitra.driver.ui.theme.OjolTheme
 import id.ojolmitra.driver.voice.OjolMitraVoice
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -183,5 +188,37 @@ class DriverJourneyScreenshotTest {
 
         assertTrue(engine.spoken.any { it.startsWith("Order selesai") })
         assertTrue(engine.spoken.any { it.startsWith("Laporan macet parah") })
+    }
+
+    /** Halaman Area Ramai pada jam tetap (17.40), supaya screenshot-nya sama setiap kali dijalankan. */
+    @Test
+    fun busyAreaPageIsReadAloudAndAnswersByVoice() {
+        compose.mainClock.autoAdvance = false
+        compose.setContent {
+            val scope = rememberCoroutineScope()
+            val controller = remember {
+                DriverController(
+                    VoiceSdk(OjolMitraVoice.config(), OjolMitraVoice.manifest, engine, scope),
+                    scope,
+                    ambientSimulation = false,
+                    timeOfDay = { 17 * 60 + 40 },
+                )
+            }
+            OjolTheme { DriverApp(controller) }
+        }
+        advance(500)
+
+        compose.onNodeWithText("Area Ramai").performClick()
+        advance(1_000)
+        assertTrue("halaman dibacakan saat dibuka", engine.spoken.any { it.startsWith("Ada ") && it.contains("area ramai") })
+        compose.onNodeWithText("Stasiun Dukuh Atas").assertExists()
+        shot("14_area_ramai")
+
+        speakCommand("detail nomor 1")
+        assertTrue(engine.spoken.last().startsWith("Nomor 1, "))
+        shot("15_area_ramai_detail_suara")
+
+        speakCommand("ada acara apa")
+        assertTrue(engine.spoken.last().startsWith("Ada ") || engine.spoken.last().startsWith("Belum ada acara"))
     }
 }

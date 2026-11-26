@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Traffic
+import androidx.compose.material.icons.filled.Whatshot
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -87,6 +88,14 @@ fun DriverApp(controller: DriverController) {
                     trip != null -> TripScreen(state, trip, location, voice, controller, onOpenReport = { reportSheetType = TrafficType.MACET })
                     state.tab == HomeTab.BERANDA ->
                         HomeScreen(state, location, voice, controller, onOpenReport = { reportSheetType = TrafficType.MACET })
+                    state.tab == HomeTab.AREA_RAMAI -> HeatmapScreen(
+                        state = state,
+                        location = location,
+                        voice = voice,
+                        onReadAll = controller::readHotspotsAloud,
+                        onReadOne = controller::readHotspotAloud,
+                        onStopReading = controller::stopReading,
+                    )
                     state.tab == HomeTab.PENDAPATAN -> EarningsScreen(state.earnings, state.completedTrips)
                     state.tab == HomeTab.LALU_LINTAS -> TrafficScreen(
                         reports = state.reports,
@@ -210,6 +219,7 @@ private fun BottomNav(selected: HomeTab, onSelect: (HomeTab) -> Unit) {
 
 private fun HomeTab.icon(): ImageVector = when (this) {
     HomeTab.BERANDA -> Icons.Filled.Home
+    HomeTab.AREA_RAMAI -> Icons.Filled.Whatshot
     HomeTab.PENDAPATAN -> Icons.Filled.AccountBalanceWallet
     HomeTab.LALU_LINTAS -> Icons.Filled.Traffic
     HomeTab.SUARA -> Icons.Filled.RecordVoiceOver
@@ -226,7 +236,8 @@ private fun voiceSuggestions(state: DriverUiState): List<String> {
             TripStage.TO_DROPOFF -> listOf("Sudah sampai", "Lapor kecelakaan di depan", "Chat sebentar lagi sampai")
             TripStage.AT_DROPOFF -> listOf("Selesai", "Chat terima kasih sudah order")
         }
-        !state.isOnline -> listOf("Mulai narik", "Pendapatan hari ini", "Lapor banjir di Kemang Raya", "Bantuan")
-        else -> listOf("Lapor macet parah di Jalan Sudirman", "Pendapatan hari ini", "Nyalakan autobid", "Offline", "Bantuan")
+        state.tab == HomeTab.AREA_RAMAI -> listOf("Detail nomor 1", "Berikutnya", "Ada acara apa?", "Ulangi", "Mulai narik")
+        !state.isOnline -> listOf("Mulai narik", "Area ramai", "Pendapatan hari ini", "Lapor banjir di Kemang Raya", "Bantuan")
+        else -> listOf("Area ramai", "Ada acara apa?", "Lapor macet parah di Jalan Sudirman", "Pendapatan hari ini", "Offline", "Bantuan")
     }
 }

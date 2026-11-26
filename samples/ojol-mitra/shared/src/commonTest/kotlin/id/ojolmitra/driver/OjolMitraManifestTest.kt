@@ -26,6 +26,7 @@ class OjolMitraManifestTest {
     private val offer = context(OjolMitraVoice.SCREEN_OFFER)
     private val trip = context(OjolMitraVoice.SCREEN_TRIP)
     private val dictation = context(OjolMitraVoice.SCREEN_DICTATION)
+    private val heatmap = context(OjolMitraVoice.SCREEN_HEATMAP)
 
     /** The command the SDK would run (score above the threshold), or null. */
     private fun match(text: String, ctx: VoiceContext = home): KeywordMatch? =
@@ -148,6 +149,51 @@ class OjolMitraManifestTest {
         assertEquals("traffic.report", m.command.id)
         assertNull(m.params["type"])
         assertCommand("traffic.open", "lihat laporan")
+    }
+
+    // ------------------------------------------------------------ area ramai (heat map)
+
+    @Test
+    fun busyAreaPhrasesWorkEverywhere() {
+        listOf(
+            "area ramai", "mana yang rame", "di mana yang ramai", "dimana yang lagi rame", "area ramai terdekat dong",
+            "ngetem dimana enaknya", "heatmap", "bacakan area ramai", "tolong cari area ramai",
+        ).forEach { assertCommand("hotspot.read", it) }
+        assertCommand("hotspot.read", "area ramai", trip)
+        assertCommand("hotspot.read", "area ramai", heatmap)
+    }
+
+    @Test
+    fun eventPhrases() {
+        listOf("ada acara apa", "acara apa saja", "ada event apa", "ada konser", "acara hari ini")
+            .forEach { assertCommand("hotspot.events", it) }
+    }
+
+    @Test
+    fun detailByNumberOnlyOnTheBusyAreaPage() {
+        assertEquals("2", match("detail nomor 2", heatmap)?.params?.get("number"))
+        assertEquals("3", match("nomor tiga", heatmap)?.params?.get("number"))
+        assertEquals("1", match("yang pertama", heatmap)?.params?.get("number"))
+        assertEquals("2", match("detail nomer dua dong", heatmap)?.params?.get("number"))
+        val ask = assertNotNull(match("detail", heatmap))
+        assertEquals("hotspot.detail", ask.command.id)
+        assertNull(ask.params["number"], "no number: the SDK asks which one")
+        assertNull(command("detail nomor 2", home))
+    }
+
+    @Test
+    fun nextAndRepeatFollowTheScreen() {
+        listOf("berikutnya", "lanjut", "yang lain", "masih ada lagi").forEach { assertCommand("hotspot.more", it, heatmap) }
+        assertCommand("hotspot.repeat", "ulangi", heatmap)
+        assertCommand("order.repeat", "ulangi", offer)
+        assertCommand("trip.next", "lanjut", trip)
+        assertCommand("order.accept", "lanjut", offer)
+    }
+
+    @Test
+    fun crowdReportIsStillATrafficReport() {
+        assertReport("lapor keramaian di gatot subroto", "DEMO", null, "Gatot Subroto")
+        assertReport("ada demo di sudirman", "DEMO", null, "Sudirman", heatmap)
     }
 
     // ------------------------------------------------------------ trip

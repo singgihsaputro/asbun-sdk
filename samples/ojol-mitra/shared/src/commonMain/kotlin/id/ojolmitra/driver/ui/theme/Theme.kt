@@ -8,6 +8,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import id.ojolmitra.driver.model.HotspotLevel
 import id.ojolmitra.driver.model.ServiceType
 import id.ojolmitra.driver.model.Severity
 import id.ojolmitra.driver.model.TrafficType
@@ -61,6 +62,12 @@ fun TrafficType.color(): Color = when (this) {
     TrafficType.RAZIA -> Color(0xFF3949AB)
     TrafficType.JALAN_RUSAK -> Ojol.Orange
     TrafficType.DEMO -> Ojol.Purple
+}
+
+fun HotspotLevel.color(): Color = when (this) {
+    HotspotLevel.SANGAT_RAMAI -> Color(0xFFE53935)
+    HotspotLevel.RAMAI -> Color(0xFFF26B21)
+    HotspotLevel.SEDANG -> Color(0xFFF4A300)
 }
 
 fun Severity.color(): Color = when (this) {

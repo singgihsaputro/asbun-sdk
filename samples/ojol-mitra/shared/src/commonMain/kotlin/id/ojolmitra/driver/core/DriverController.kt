@@ -9,6 +9,7 @@ import id.asbun.voice.VoiceEvent
 import id.asbun.voice.VoiceSdk
 import id.ojolmitra.driver.epochMillis
 import id.ojolmitra.driver.formatClock
+import id.ojolmitra.driver.localMinuteOfDay
 import id.ojolmitra.driver.map.CityMap
 import id.ojolmitra.driver.map.MapPoint
 import id.ojolmitra.driver.model.ActiveTrip
@@ -27,6 +28,7 @@ import id.ojolmitra.driver.model.voiceHint
 import id.ojolmitra.driver.model.spokenKm
 import id.ojolmitra.driver.model.spokenRupiah
 import id.ojolmitra.driver.sim.CustomerBot
+import id.ojolmitra.driver.sim.DemandForecast
 import id.ojolmitra.driver.sim.OrderFactory
 import id.ojolmitra.driver.voice.OjolMitraVoice
 import id.ojolmitra.driver.voice.Speech
@@ -63,6 +65,8 @@ class DriverController(
     private val timing: SimTiming = SimTiming(),
     private val clock: () -> Long = { epochMillis() },
     private val ambientSimulation: Boolean = true,
+    /** Jam lokal dalam menit sejak tengah malam, untuk perkiraan area ramai (test bisa memakunya). */
+    private val timeOfDay: () -> Int = { localMinuteOfDay(clock()) },
 ) {
     private val orders = OrderFactory(random)
     private val bot = CustomerBot(random)
@@ -78,7 +82,11 @@ class DriverController(
     private var offerTimerJob: Job? = null
     private var moveJob: Job? = null
     private var ambientJob: Job? = null
+    private var hotspotJob: Job? = null
     private val tripJobs = mutableListOf<Job>()
+
+    /** Area ramai berikutnya yang belum dibacakan ("berikutnya"). */
+    private var hotspotCursor = 0
 
     /** Panel asisten, mode dikte, dan riwayat perintah. */
     val voicePanel = VoicePanel(voice, scope, ::now)
@@ -118,7 +126,29 @@ class DriverController(
 
     fun setReadMessagesAloud(enabled: Boolean) = mutate { it.copy(readMessagesAloud = enabled) }
 
-    fun selectTab(tab: HomeTab) = mutate { it.copy(tab = tab) }
+    fun selectTab(tab: HomeTab) {
+        val previous = _state.value.tab
+        mutate { it.copy(tab = tab) }
+        if (tab != HomeTab.AREA_RAMAI || previous == tab) return
+        refreshHotspots()
+        startHotspotUpdates()
+        // Hands-free: halaman area ramai langsung dibacakan, tanpa memotong suara atau mic yang sedang jalan.
+        if (_state.value.handsFree) voice.speak(hotspotListReply(from = 0))
+    }
+
+    /** Tombol "Bacakan area terdekat". */
+    fun readHotspotsAloud() {
+        refreshHotspots()
+        voice.speak(hotspotListReply(from = 0), interrupt = true)
+    }
+
+    /** Tombol speaker di kartu area nomor [index] + 1. */
+    fun readHotspotAloud(index: Int) {
+        val spot = _state.value.hotspots.getOrNull(index) ?: return
+        voice.speak(Speech.hotspotDetail(spot, index + 1), interrupt = true)
+    }
+
+    fun stopReading() = voice.cancel()
 
     fun acceptOffer() {
         doAccept()?.let(::announce)
@@ -207,6 +237,7 @@ class DriverController(
         offerTimerJob?.cancel()
         moveJob?.cancel()
         ambientJob?.cancel()
+        hotspotJob?.cancel()
         cancelTripJobs()
         voice.close() // juga melepas engine suara (SpeechRecognizer / AVAudioEngine)
     }
@@ -582,6 +613,44 @@ class DriverController(
         }
     }
 
+    // =============================================================== area ramai (heat map)
+
+    /** Hitung ulang perkiraan dari jam sekarang dan posisi driver. */
+    private fun refreshHotspots() {
+        val minute = timeOfDay()
+        val spots = DemandForecast.forecast(minute, _location.value.position)
+        mutate { it.copy(hotspots = spots, hotspotsAtMinute = minute) }
+    }
+
+    /** Selama halaman Area Ramai terbuka, perkiraan diperbarui tiap 30 detik (jarak berubah saat driver bergerak). */
+    private fun startHotspotUpdates() {
+        hotspotJob?.cancel()
+        hotspotJob = scope.launch {
+            while (isActive) {
+                delay(HOTSPOT_REFRESH_MS)
+                if (_state.value.tab != HomeTab.AREA_RAMAI) break
+                refreshHotspots()
+            }
+        }
+    }
+
+    /** Kalimat daftar mulai dari indeks [from]; "berikutnya" melanjutkan dari sana. */
+    private fun hotspotListReply(from: Int): String {
+        val spots = _state.value.hotspots
+        hotspotCursor = minOf(spots.size, from + Speech.HOTSPOTS_PER_READ)
+        return Speech.hotspotList(spots, from)
+    }
+
+    /** Perintah suara area ramai membuka halamannya, kecuali sedang ada order atau perjalanan. */
+    private fun showHotspots() {
+        val s = _state.value
+        if (s.trip == null && s.offer == null && s.tab != HomeTab.AREA_RAMAI) {
+            mutate { it.copy(tab = HomeTab.AREA_RAMAI) }
+            startHotspotUpdates()
+        }
+        refreshHotspots()
+    }
+
     // =============================================================== movement
 
     private fun placeDriverAt(point: MapPoint) {
@@ -743,6 +812,32 @@ class DriverController(
             val latest = s.reports.firstOrNull()?.let { "${it.type.spoken} di ${Speech.place(it.locationLabel)}" } ?: "belum ada"
             HandlerResult.success("Ada ${s.reports.size} laporan lalu lintas di sekitarmu. Yang terbaru: $latest.")
         }
+        handler("readHotspots") {
+            showHotspots()
+            HandlerResult.success(hotspotListReply(from = 0))
+        }
+        handler("moreHotspots") {
+            val spots = _state.value.hotspots
+            if (hotspotCursor >= spots.size) {
+                hotspotCursor = 0
+                HandlerResult.success("Itu semua area ramai di sekitarmu. Ucapkan ulangi untuk mulai dari awal.")
+            } else {
+                HandlerResult.success(hotspotListReply(from = hotspotCursor))
+            }
+        }
+        handler("hotspotDetail") { call ->
+            val spots = _state.value.hotspots
+            val number = call.param("number")?.toIntOrNull()
+            when {
+                number == null -> HandlerResult.failure()
+                number !in 1..spots.size -> HandlerResult.failure("Hanya ada ${spots.size} area. Sebutkan nomor 1 sampai ${spots.size}.")
+                else -> HandlerResult.success(Speech.hotspotDetail(spots[number - 1], number))
+            }
+        }
+        handler("readEvents") {
+            showHotspots()
+            HandlerResult.success(Speech.hotspotEvents(_state.value.hotspots))
+        }
         handler("goOnline") { HandlerResult.success(doSetOnline(true)) }
         handler("goOffline") {
             val message = doSetOnline(false)
@@ -761,7 +856,7 @@ class DriverController(
         }
         handler("help") {
             val s = _state.value
-            HandlerResult.success(Speech.help(s.offer != null, s.trip != null))
+            HandlerResult.success(Speech.help(s.offer != null, s.trip != null, onHeatmap = s.tab == HomeTab.AREA_RAMAI))
         }
     }
 
@@ -782,6 +877,7 @@ class DriverController(
             offer != null -> OjolMitraVoice.SCREEN_OFFER
             trip != null && s.showChat -> OjolMitraVoice.SCREEN_CHAT
             trip != null -> OjolMitraVoice.SCREEN_TRIP
+            s.tab == HomeTab.AREA_RAMAI -> OjolMitraVoice.SCREEN_HEATMAP
             else -> OjolMitraVoice.SCREEN_HOME
         }
         val values = buildMap<String, Any?> {
@@ -793,6 +889,7 @@ class DriverController(
                     dictating -> "Ucapkan pesanmu, atau batal."
                     offer != null -> "Ucapkan terima, atau tolak."
                     trip != null -> "Ucapkan ${trip.stage.voiceHint()}."
+                    s.tab == HomeTab.AREA_RAMAI -> "Ucapkan detail nomor satu, atau berikutnya."
                     else -> "Coba ulangi."
                 },
             )
@@ -833,6 +930,7 @@ class DriverController(
     companion object {
         val START_POSITION = MapPoint(700f, 820f)
         private const val MAX_REPORTS = 20
+        private const val HOTSPOT_REFRESH_MS = 30_000L
         private const val NO_TRIP = "Belum ada order aktif."
         private val OTHER_DRIVERS = listOf("Agus", "Joko", "Rudi", "Wawan", "Eko", "Hendra", "Slamet", "Dedi", "Asep", "Yanto")
     }

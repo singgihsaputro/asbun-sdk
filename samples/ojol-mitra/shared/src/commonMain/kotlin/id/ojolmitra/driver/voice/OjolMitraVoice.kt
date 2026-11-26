@@ -12,7 +12,7 @@ import id.ojolmitra.driver.model.capitalizeFirst
  * handlers), the screens it sends as context, and the SDK configuration.
  *
  * Context sent with every utterance (see `DriverController.syncVoiceContext`):
- * - `screen`: [SCREEN_HOME], [SCREEN_OFFER], [SCREEN_TRIP], [SCREEN_CHAT] or [SCREEN_DICTATION]
+ * - `screen`: [SCREEN_HOME], [SCREEN_HEATMAP], [SCREEN_OFFER], [SCREEN_TRIP], [SCREEN_CHAT] or [SCREEN_DICTATION]
  * - `dictating`, `online` (booleans), `hint` (what to say next, used in re-prompts)
  * - offer: `orderId`; trip: `tripId`, `customer`, `stage`, `target`, `targetDistance`
  */
@@ -21,6 +21,8 @@ object OjolMitraVoice {
     const val SCHEME = "ojolmitra"
 
     const val SCREEN_HOME = "home"
+    /** Halaman Area Ramai: "detail nomor 2", "berikutnya" dan "ulangi" merujuk ke daftarnya. */
+    const val SCREEN_HEATMAP = "heatmap"
     const val SCREEN_OFFER = "order_offer"
     const val SCREEN_TRIP = "trip"
     const val SCREEN_CHAT = "chat"
@@ -108,13 +110,13 @@ internal const val MANIFEST_JSON = """
       "aktifkan": "aktif", "nyalakan": "aktif", "hidupkan": "aktif", "aktipkan": "aktif", "nonaktifkan": "nonaktif",
       "navigasikan": "navigasi", "batalin": "batal", "batalkan": "batal", "ulangin": "ulangi",
       "lanjutkan": "lanjut", "lanjutin": "lanjut", "berlobang": "berlubang", "antri": "antrean", "antrian": "antrean",
-      "hatihati": "awas"
+      "hatihati": "awas", "rame": "ramai", "rami": "ramai", "event": "acara", "events": "acara", "nomer": "nomor"
     }
   },
   "fillers": {
     "id-ID": ["halo", "hai", "hei", "hey", "mitra", "asisten", "tolong", "coba", "please", "eh", "em", "hmm", "oke",
               "dong", "deh", "aja", "saja", "ya", "yah", "sih", "nih", "pak", "bos", "bang", "kak", "mas", "mbak",
-              "sekarang", "yuk", "ayo", "dulu", "segera", "cepat"]
+              "sekarang", "yuk", "ayo", "dulu", "segera", "cepat", "enaknya", "kira", "kirakira"]
   },
   "suffixes": { "id-ID": ["nya", "lah", "kah"] },
   "commands": [
@@ -277,6 +279,62 @@ internal const val MANIFEST_JSON = """
                   "info jalan", "kondisi jalan", "lalin", "info lalin"],
       "when": { "dictating": false },
       "action": { "type": "handler", "name": "openTraffic" }
+    },
+    {
+      "id": "hotspot.read",
+      "description": "Open the busy-area heat map and read the nearest busy areas aloud: busy hours, expected passengers, drivers nearby and events.",
+      "phrases": ["area ramai", "area ramai terdekat", "daerah ramai", "tempat ramai", "lokasi ramai", "titik ramai",
+                  "spot ramai", "zona ramai", "mana yang ramai", "di mana yang ramai", "mana yang lagi ramai",
+                  "yang ramai di mana", "di mana yang lagi ramai", "ramai di mana", "dimana yang ramai", "ramai dimana",
+                  "yang ramai dimana", "dimana yang lagi ramai", "peta ramai", "heat map", "heatmap",
+                  "peta panas", "bacakan area ramai", "lihat area ramai", "buka area ramai", "cari area ramai",
+                  "area gacor", "tempat gacor", "cari penumpang", "di mana banyak order", "mana yang banyak order",
+                  "area banyak order", "ngetem di mana", "ngetem dimana",
+                  "mangkal di mana", "mangkal dimana", "ke mana cari order", "kemana cari order"],
+      "when": { "dictating": false },
+      "action": { "type": "handler", "name": "readHotspots" }
+    },
+    {
+      "id": "hotspot.events",
+      "description": "Tell which events (concerts, bazaars, matches, weddings) are on nearby and when their visitors will need rides.",
+      "phrases": ["acara", "ada acara", "ada acara apa", "acara apa", "acara apa saja", "acara hari ini", "acara terdekat",
+                  "info acara", "acara di mana", "acara dimana", "ada acara di mana", "konser", "ada konser", "ada konser apa", "bazar", "ada bazar"],
+      "when": { "dictating": false },
+      "action": { "type": "handler", "name": "readEvents" }
+    },
+    {
+      "id": "hotspot.detail",
+      "description": "On the busy-area page: read all details of one area from the list, by its number.",
+      "phrases": ["detail {number}", "detail nomor {number}", "detail area {number}", "detail area nomor {number}",
+                  "detail yang {number}", "nomor {number}", "area {number}", "area nomor {number}", "yang {number}",
+                  "info nomor {number}", "info area {number}", "bacakan nomor {number}", "jelaskan nomor {number}",
+                  "rincian nomor {number}", "lengkapnya nomor {number}", "detail", "detail area", "rincian"],
+      "when": { "screen": "heatmap" },
+      "params": [
+        { "name": "number", "type": "enum", "from": "speech", "required": true,
+          "values": {
+            "1": ["1", "satu", "pertama", "kesatu"], "2": ["2", "dua", "kedua"], "3": ["3", "tiga", "ketiga"],
+            "4": ["4", "empat", "keempat"], "5": ["5", "lima", "kelima"], "6": ["6", "enam", "keenam"],
+            "7": ["7", "tujuh", "ketujuh"], "8": ["8", "delapan", "kedelapan"]
+          },
+          "ask": "Area nomor berapa? Misalnya, detail nomor satu." }
+      ],
+      "action": { "type": "handler", "name": "hotspotDetail" }
+    },
+    {
+      "id": "hotspot.more",
+      "description": "On the busy-area page: read the next busy areas in the list.",
+      "phrases": ["berikutnya", "selanjutnya", "lanjut", "lanjut lagi", "lagi", "yang lain", "lainnya", "area lain",
+                  "area lainnya", "area berikutnya", "masih ada", "masih ada lagi", "terus", "next", "sisanya"],
+      "when": { "screen": "heatmap" },
+      "action": { "type": "handler", "name": "moreHotspots" }
+    },
+    {
+      "id": "hotspot.repeat",
+      "description": "On the busy-area page: read the nearest busy areas again from the start.",
+      "phrases": ["ulangi", "ulang", "ulangi dari awal", "dari awal", "baca lagi", "bacakan lagi", "bacakan", "baca"],
+      "when": { "screen": "heatmap" },
+      "action": { "type": "handler", "name": "readHotspots" }
     },
     {
       "id": "driver.online",

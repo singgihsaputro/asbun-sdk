@@ -59,6 +59,11 @@ private val COMMAND_GROUPS = listOf(
         ),
     ),
     CommandGroup(
+        "🔥", "Area ramai",
+        "Dengar area ramai terdekat: jam ramainya, calon penumpang, driver, dan acaranya. Lalu “detail nomor 2” atau “berikutnya”.",
+        listOf("Area ramai", "Mana yang rame?", "Ada acara apa?", "Ngetem di mana?"),
+    ),
+    CommandGroup(
         "🛵", "Selama perjalanan",
         "Konfirmasi tiap tahap tanpa geser tombol.",
         listOf("Sudah sampai", "Mulai perjalanan", "Selesai", "Buka navigasi", "Telepon penumpang"),
