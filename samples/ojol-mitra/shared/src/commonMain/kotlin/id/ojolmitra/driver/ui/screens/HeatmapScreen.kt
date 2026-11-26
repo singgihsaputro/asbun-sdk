@@ -48,6 +48,7 @@ import id.ojolmitra.driver.model.formatKm
 import id.ojolmitra.driver.model.formatTimeOfDay
 import id.ojolmitra.driver.model.formatTimeRange
 import id.ojolmitra.driver.ui.components.CityMapView
+import id.ojolmitra.driver.ui.components.MicFab
 import id.ojolmitra.driver.ui.components.Pill
 import id.ojolmitra.driver.ui.theme.Ojol
 import id.ojolmitra.driver.ui.theme.color
@@ -67,12 +68,14 @@ fun HeatmapScreen(
     onReadAll: () -> Unit,
     onReadOne: (Int) -> Unit,
     onStopReading: () -> Unit,
+    onMic: () -> Unit,
 ) {
     val spots = state.hotspots
     val speaking = voice.phase == VoicePhase.SPEAKING
+    Box(Modifier.fillMaxSize()) {
     LazyColumn(
         Modifier.fillMaxSize().background(Ojol.Background),
-        contentPadding = PaddingValues(bottom = 24.dp),
+        contentPadding = PaddingValues(bottom = 96.dp),
     ) {
         item { HeatmapHeader(spots, state.hotspotsAtMinute) }
         item {
@@ -85,7 +88,7 @@ fun HeatmapScreen(
         item {
             Box(
                 Modifier
-                    .padding(16.dp)
+                    .padding(start = 16.dp, end = 16.dp, top = 16.dp)
                     .fillMaxWidth()
                     .height(250.dp)
                     .clip(RoundedCornerShape(18.dp))
@@ -99,8 +102,8 @@ fun HeatmapScreen(
                     overview = listOf(location.position) + spots.take(5).map { it.position },
                     hotspots = spots,
                 )
-                HeatLegend(Modifier.align(Alignment.BottomStart).padding(10.dp))
             }
+            HeatLegend(Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
         }
         item {
             Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -132,6 +135,9 @@ fun HeatmapScreen(
             )
         }
     }
+    // Mic untuk tanya lanjut: "detail nomor 2", "berikutnya", "ada acara apa".
+    MicFab(voice, onMic, Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = 14.dp))
+    }
 }
 
 @Composable
@@ -153,7 +159,7 @@ private fun HeatmapHeader(spots: List<Hotspot>, atMinute: Int) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Pill("Jam ${formatTimeOfDay(atMinute)}", Color.White.copy(alpha = 0.2f), Color.White)
             Pill("${spots.size} area", Color.White.copy(alpha = 0.2f), Color.White)
-            Pill("${spots.count { it.ongoing }} sedang ramai", Color.White.copy(alpha = 0.2f), Color.White)
+            Pill("${spots.count { it.ongoing }} ramai sekarang", Color.White.copy(alpha = 0.2f), Color.White)
             val events = spots.count { it.event != null }
             if (events > 0) Pill("$events acara", Color.White.copy(alpha = 0.2f), Color.White)
         }
@@ -200,18 +206,15 @@ private fun ReadAloudCard(speaking: Boolean, onClick: () -> Unit, modifier: Modi
 @Composable
 private fun HeatLegend(modifier: Modifier = Modifier) {
     Row(
-        modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(Color.White.copy(alpha = 0.92f))
-            .padding(horizontal = 8.dp, vertical = 5.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         HotspotLevel.entries.forEach { level ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(9.dp).clip(CircleShape).background(level.color()))
                 Spacer(Modifier.width(4.dp))
-                Text(level.label, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                Text(level.label, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = Ojol.TextSecondary)
             }
         }
     }
@@ -259,7 +262,7 @@ private fun HotspotCard(spot: Hotspot, number: Int, onRead: () -> Unit) {
                 Text(formatTimeRange(spot.startMinute, spot.endMinute), fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 Spacer(Modifier.width(8.dp))
                 if (spot.ongoing) {
-                    Pill("Sedang ramai", Ojol.Red.copy(alpha = 0.1f), Ojol.Red)
+                    Pill("Ramai sekarang", Ojol.Red.copy(alpha = 0.1f), Ojol.Red)
                 } else {
                     Pill("${formatDuration(spot.startsInMinutes)} lagi", Ojol.Amber.copy(alpha = 0.16f), Color(0xFFA86B00))
                 }

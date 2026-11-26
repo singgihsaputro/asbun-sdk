@@ -95,6 +95,7 @@ fun DriverApp(controller: DriverController) {
                         onReadAll = controller::readHotspotsAloud,
                         onReadOne = controller::readHotspotAloud,
                         onStopReading = controller::stopReading,
+                        onMic = controller::onMicPressed,
                     )
                     state.tab == HomeTab.PENDAPATAN -> EarningsScreen(state.earnings, state.completedTrips)
                     state.tab == HomeTab.LALU_LINTAS -> TrafficScreen(

@@ -114,7 +114,7 @@ class HotspotForecastTest {
             val expected = when {
                 spot.people / spot.drivers >= 18 -> HotspotLevel.SANGAT_RAMAI
                 spot.people / spot.drivers >= 11 -> HotspotLevel.RAMAI
-                else -> HotspotLevel.SEDANG
+                else -> HotspotLevel.LUMAYAN
             }
             assertEquals(expected, spot.level, spot.name)
         }

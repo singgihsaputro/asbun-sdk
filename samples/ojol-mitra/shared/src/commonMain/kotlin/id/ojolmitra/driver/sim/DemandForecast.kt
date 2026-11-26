@@ -117,7 +117,8 @@ object DemandForecast {
 
     private fun atPark(id: String, parkName: String, start: String, end: String, people: Int, drivers: Int, event: Pair<HotspotEvent, Int>) =
         Template(
-            id, parkName, park(parkName).area.center, t(start), t(end), people, drivers, HotspotReason.ACARA,
+            // Sedikit di atas tengah taman supaya nomornya tidak menutupi nama taman di peta.
+            id, parkName, park(parkName).area.center.let { MapPoint(it.x, it.y - 60f) }, t(start), t(end), people, drivers, HotspotReason.ACARA,
             event.first, visibleFrom = minOf(t(start), event.second),
         )
 

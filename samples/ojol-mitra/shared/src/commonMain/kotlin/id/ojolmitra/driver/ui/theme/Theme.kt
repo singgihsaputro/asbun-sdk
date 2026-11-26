@@ -67,7 +67,7 @@ fun TrafficType.color(): Color = when (this) {
 fun HotspotLevel.color(): Color = when (this) {
     HotspotLevel.SANGAT_RAMAI -> Color(0xFFE53935)
     HotspotLevel.RAMAI -> Color(0xFFF26B21)
-    HotspotLevel.SEDANG -> Color(0xFFF4A300)
+    HotspotLevel.LUMAYAN -> Color(0xFFF4A300)
 }
 
 fun Severity.color(): Color = when (this) {

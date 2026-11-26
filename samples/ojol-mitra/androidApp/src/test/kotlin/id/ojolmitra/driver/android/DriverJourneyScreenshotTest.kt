@@ -17,6 +17,7 @@ import id.asbun.voice.VoiceEngineListener
 import id.asbun.voice.VoiceSdk
 import id.ojolmitra.driver.App
 import id.ojolmitra.driver.core.DriverController
+import id.ojolmitra.driver.sim.DemandForecast
 import id.ojolmitra.driver.ui.screens.DriverApp
 import id.ojolmitra.driver.ui.theme.OjolTheme
 import id.ojolmitra.driver.voice.OjolMitraVoice
@@ -211,7 +212,9 @@ class DriverJourneyScreenshotTest {
         compose.onNodeWithText("Area Ramai").performClick()
         advance(1_000)
         assertTrue("halaman dibacakan saat dibuka", engine.spoken.any { it.startsWith("Ada ") && it.contains("area ramai") })
-        compose.onNodeWithText("Stasiun Dukuh Atas").assertExists()
+        // Daftar hanya menyusun kartu yang terlihat: cek area terdekat (nomor 1).
+        val nearest = DemandForecast.forecast(17 * 60 + 40, DriverController.START_POSITION).first()
+        compose.onNodeWithText(nearest.name).assertExists()
         shot("14_area_ramai")
 
         speakCommand("detail nomor 1")

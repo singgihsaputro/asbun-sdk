@@ -107,7 +107,7 @@ object Speech {
             when (spot.level) {
                 HotspotLevel.SANGAT_RAMAI -> "Peluang order tinggi, driver masih sedikit."
                 HotspotLevel.RAMAI -> "Peluang order bagus."
-                HotspotLevel.SEDANG -> "Lumayan ramai, tapi driver di sana sudah cukup banyak."
+                HotspotLevel.LUMAYAN -> "Lumayan ramai, tapi driver di sana sudah cukup banyak."
             },
         )
     }

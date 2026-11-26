@@ -7,7 +7,7 @@ import kotlin.math.max
 enum class HotspotLevel(val label: String, val spoken: String) {
     SANGAT_RAMAI("Sangat ramai", "sangat ramai"),
     RAMAI("Ramai", "ramai"),
-    SEDANG("Sedang", "lumayan ramai"),
+    LUMAYAN("Lumayan", "lumayan ramai"),
 }
 
 /** Kenapa sebuah area ramai. [spoken] dirangkai ke kalimat TTS: "ramai karena ...". */
@@ -65,7 +65,7 @@ data class Hotspot(
         get() = when {
             peoplePerDriver >= SANGAT_RAMAI_PER_DRIVER -> HotspotLevel.SANGAT_RAMAI
             peoplePerDriver >= RAMAI_PER_DRIVER -> HotspotLevel.RAMAI
-            else -> HotspotLevel.SEDANG
+            else -> HotspotLevel.LUMAYAN
         }
     val etaMinutes: Int get() = etaMinutes(distanceKm)
 
