@@ -32,6 +32,7 @@ data class DriverUiState(
     val isOnline: Boolean = false,
     val autobid: Boolean = false,
     val handsFree: Boolean = true,
+    val wakeWord: Boolean = true,
     val readMessagesAloud: Boolean = true,
     val tab: HomeTab = HomeTab.BERANDA,
     val showChat: Boolean = false,

@@ -153,6 +153,43 @@ public class KeywordMatcher(
         return null
     }
 
+    /**
+     * Wake-word check: null unless a phrase (each word exact, or one letter off when 5+ letters) starts [text];
+     * otherwise the words after it as spoken, "" when nothing follows. Fillers are kept on purpose.
+     */
+    internal fun wakeRemainder(text: String, phrases: List<String>): String? {
+        val tokens = normalizer.tokenize(text)
+        for (phrase in phrases) {
+            val words = normalizer.words(phrase)
+            if (words.isEmpty()) continue
+            val used = when {
+                tokens.size >= words.size &&
+                    words.indices.all { tokens[it].canon == words[it] || (words[it].length >= 5 && withinOneEdit(tokens[it].canon, words[it])) } ->
+                    words.size
+                else -> mergedPhraseLength(tokens, words)
+            } ?: continue
+            return tokens.drop(used).joinToString(" ") { it.original }.trimStart(',', '.', '!', '?', ' ')
+        }
+        return null
+    }
+
+    /**
+     * The recognizer sometimes writes a multi-word phrase as fewer words ("alomitra" for "halo mitra").
+     * Compares the first 1..n-1 tokens, spaces removed, with the phrase spaces removed: 1 letter off is
+     * allowed, 2 when the phrase has 8+ letters. Returns how many tokens the phrase used, or null.
+     * Tokens that keep the phrase's word count go through the per-word rule only, so real words that
+     * sound close ("kalau mitra", "alam mitra") are not widened by this.
+     */
+    private fun mergedPhraseLength(tokens: List<Token>, words: List<String>): Int? {
+        val target = words.joinToString("")
+        val allowed = if (target.length >= 8) 2 else 1
+        for (n in 1 until minOf(words.size, tokens.size + 1)) {
+            val joined = tokens.take(n).joinToString("") { it.canon }
+            if (editDistance(joined, target, allowed) <= allowed) return n
+        }
+        return null
+    }
+
     /** Matching form of a word list, for yes/no/cancel checks. */
     public fun canonicalWords(text: String): List<String> = normalizer.tokenize(text).map { it.canon }
 
@@ -359,6 +396,22 @@ public class KeywordMatcher(
 
         fun containsSequence(tokens: List<String>, words: List<String>): Boolean =
             words.isNotEmpty() && (0..tokens.size - words.size).any { startsWithAt(tokens, it, words) }
+
+        /** Levenshtein distance, or [limit] + 1 as soon as it is known to exceed [limit]. */
+        fun editDistance(a: String, b: String, limit: Int): Int {
+            if (kotlin.math.abs(a.length - b.length) > limit) return limit + 1
+            var prev = IntArray(b.length + 1) { it }
+            for (i in 1..a.length) {
+                val cur = IntArray(b.length + 1)
+                cur[0] = i
+                for (j in 1..b.length) {
+                    cur[j] = minOf(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + if (a[i - 1] == b[j - 1]) 0 else 1)
+                }
+                if (cur.min() > limit) return limit + 1
+                prev = cur
+            }
+            return prev[b.length]
+        }
 
         /** Levenshtein distance <= 1. */
         fun withinOneEdit(a: String, b: String): Boolean {

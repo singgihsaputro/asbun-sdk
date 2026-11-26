@@ -7,5 +7,5 @@ import platform.UIKit.UIViewController
 
 /** Dipanggil dari Swift: `MainViewControllerKt.MainViewController()`. */
 fun MainViewController(): UIViewController = ComposeUIViewController {
-    App { scope -> VoiceSdkIos.create(OjolMitraVoice.config(), OjolMitraVoice.manifest, scope) }
+    App(createVoice = { scope -> VoiceSdkIos.create(OjolMitraVoice.config(), OjolMitraVoice.manifest, scope) })
 }

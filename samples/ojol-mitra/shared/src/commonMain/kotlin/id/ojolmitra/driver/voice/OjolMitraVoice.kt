@@ -5,6 +5,7 @@ import id.asbun.voice.DispatchConfig
 import id.asbun.voice.LlmConfig
 import id.asbun.voice.VoiceConfig
 import id.asbun.voice.VoiceMessages
+import id.asbun.voice.WakeWordConfig
 import id.ojolmitra.driver.model.capitalizeFirst
 
 /**
@@ -27,6 +28,10 @@ object OjolMitraVoice {
     /** Chat screen mic: whatever the driver says is the message. */
     const val SCREEN_DICTATION = "dictation"
 
+    /** Shown once when "Halo Mitra" cannot run because the phone has no offline Indonesian recognition. */
+    const val WAKE_UNAVAILABLE_WARNING =
+        "“Halo Mitra” tidak aktif: unduh bahasa Indonesia untuk pengenalan suara offline di pengaturan HP."
+
     val manifest: CommandManifest by lazy { CommandManifest.fromJson(MANIFEST_JSON) }
 
     /**
@@ -38,6 +43,7 @@ object OjolMitraVoice {
         locale = LOCALE,
         llm = llm,
         dispatch = DispatchConfig(allowedSchemes = listOf(SCHEME)),
+        wakeWord = WakeWordConfig(listOf("halo mitra")),
         messages = VoiceMessages.INDONESIAN.copy(
             notUnderstood = "Maaf, perintah belum dikenali. Ucapkan bantuan untuk contoh perintah.",
             reprompt = "Maaf, kurang jelas. {context.hint}",
@@ -94,6 +100,7 @@ internal const val MANIFEST_JSON = """
       "ok": "oke", "okay": "oke", "okey": "oke", "oce": "oke", "okee": "oke", "okeh": "oke",
       "iya": "ya", "yaa": "ya", "yap": "ya", "yup": "ya", "yoi": "ya", "yes": "ya",
       "telpon": "telepon", "telfon": "telepon", "tlp": "telepon", "nelpon": "telepon", "telponin": "telepon", "teleponin": "telepon",
+      "alo": "halo", "hallo": "halo", "helo": "halo",
       "jl": "jalan", "jln": "jalan", "tau": "tahu", "dapet": "dapat",
       "customer": "penumpang", "kustomer": "penumpang", "costumer": "penumpang", "kastemer": "penumpang",
       "pelanggan": "penumpang", "pelangan": "penumpang", "konsumen": "penumpang", "pemesan": "penumpang",

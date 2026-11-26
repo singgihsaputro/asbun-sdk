@@ -6,6 +6,7 @@ import id.asbun.voice.VoiceEvent
 import id.asbun.voice.VoiceEventListener
 import id.asbun.voice.VoiceSdk
 import id.asbun.voice.VoiceState
+import id.asbun.voice.WakeUnavailableReason
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -58,6 +59,7 @@ data class VoiceUiState(
     val panelPinned: Boolean = false,
     val error: String? = null,
     val recognitionAvailable: Boolean = true,
+    val wakeUnavailable: WakeUnavailableReason? = null,
     val log: List<VoiceLogEntry> = emptyList(),
 ) {
     companion object {
@@ -76,6 +78,7 @@ data class VoiceUiState(
             panelPinned = panel.pinned,
             error = sdk.error?.let { errorText(it, sdk.recognitionAvailable) },
             recognitionAvailable = sdk.recognitionAvailable,
+            wakeUnavailable = sdk.wakeUnavailable,
             log = panel.log,
         )
 

@@ -5,6 +5,7 @@ import id.ojolmitra.driver.core.SimTiming
 import id.ojolmitra.driver.map.CityMap
 import id.ojolmitra.driver.model.TrafficType
 import id.ojolmitra.driver.model.TripStage
+import id.asbun.voice.ListenMode
 import id.asbun.voice.VoiceEngine
 import id.asbun.voice.VoiceEngineListener
 import id.asbun.voice.VoiceError
@@ -20,6 +21,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -34,8 +36,16 @@ private class FakeVoiceEngine : VoiceEngine {
     var listenCount = 0
         private set
 
-    override fun startListening(languageTag: String) {
-        listening = true
+    /** Sesi mode WAKE sedang terbuka (terpisah dari `listening` = sesi perintah). */
+    var wakeOpen = false
+        private set
+    var wakeAvailable = true
+    override val isWakeListeningAvailable: Boolean get() = wakeAvailable
+
+    override fun startListening(languageTag: String) = startListening(languageTag, ListenMode.COMMAND)
+
+    override fun startListening(languageTag: String, mode: ListenMode) {
+        if (mode == ListenMode.WAKE) wakeOpen = true else listening = true
         listenCount++
         listener?.onListeningStarted()
     }
@@ -43,6 +53,7 @@ private class FakeVoiceEngine : VoiceEngine {
     override fun stopListening() {}
     override fun cancelListening() {
         listening = false
+        wakeOpen = false
     }
 
     override fun speak(text: String, utteranceId: String, languageTag: String) {
@@ -55,8 +66,9 @@ private class FakeVoiceEngine : VoiceEngine {
     override fun shutdown() {}
 
     fun say(text: String) {
-        check(listening) { "Asisten tidak sedang mendengarkan" }
+        check(listening || wakeOpen) { "Asisten tidak sedang mendengarkan" }
         listening = false
+        wakeOpen = false
         listener?.onFinalResult(listOf(text))
     }
 
@@ -144,6 +156,45 @@ class DriverControllerTest {
         advanceTimeBy(4_000)
         runCurrent()
         assertNotNull(c.state.value.offer)
+    }
+
+    @Test
+    fun wakeWordOnlyWhileOnlineForegroundAndEnabled() = runTest {
+        val c = newController(FakeVoiceEngine())
+        assertFalse(c.voice.state.value.wakeListening)
+        c.setOnline(true)
+        assertTrue(c.voice.state.value.wakeListening)
+        c.setAppForeground(false)
+        assertFalse(c.voice.state.value.wakeListening)
+        c.setAppForeground(true)
+        assertTrue(c.voice.state.value.wakeListening)
+        c.setWakeWord(false)
+        assertFalse(c.voice.state.value.wakeListening)
+    }
+
+    @Test
+    fun unavailableWakeWordWarnsOnce() = runTest {
+        val engine = FakeVoiceEngine().apply { wakeAvailable = false }
+        val c = newController(engine)
+        c.setOnline(true)
+        runCurrent()
+        assertFalse(c.voice.state.value.wakeListening)
+        val warning = assertNotNull(c.state.value.snackbar)
+        assertEquals(OjolMitraVoice.WAKE_UNAVAILABLE_WARNING, warning.text)
+        c.setAppForeground(false)
+        c.setAppForeground(true)
+        runCurrent()
+        assertEquals(warning.id, c.state.value.snackbar?.id, "warned again")
+    }
+
+    @Test
+    fun wakePhraseRunsCommandAndOpensPanel() = runTest {
+        val engine = FakeVoiceEngine()
+        val c = newController(engine)
+        c.setOnline(true)
+        engine.say("halo mitra pendapatan hari ini")
+        assertTrue(c.voicePanel.state.value.pinned)
+        assertTrue(c.lastResponse().startsWith("Pendapatan hari ini"))
     }
 
     @Test

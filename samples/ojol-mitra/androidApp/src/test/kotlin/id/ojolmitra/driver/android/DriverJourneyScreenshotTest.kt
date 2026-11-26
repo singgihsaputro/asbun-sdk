@@ -109,7 +109,7 @@ class DriverJourneyScreenshotTest {
     @Test
     fun fullDriverJourneyWithVoiceCommands() {
         compose.mainClock.autoAdvance = false
-        compose.setContent { App { scope -> VoiceSdk(OjolMitraVoice.config(), OjolMitraVoice.manifest, engine, scope) } }
+        compose.setContent { App(createVoice = { scope -> VoiceSdk(OjolMitraVoice.config(), OjolMitraVoice.manifest, engine, scope) }) }
         advance(500)
         shot("01_beranda_offline")
 

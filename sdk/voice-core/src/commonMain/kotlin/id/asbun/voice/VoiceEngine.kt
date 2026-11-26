@@ -10,13 +10,18 @@ public enum class VoiceError {
     UNKNOWN,
 }
 
+/** [WAKE]: a background session listening for the wake phrase; audio must never leave the phone (offline recognition only). */
+public enum class ListenMode { COMMAND, WAKE }
+
 /**
  * Events from a platform speech engine. Always delivered on the main thread.
  *
  * Contract for one listening session: [onListeningStarted] -> (level/partial)* -> exactly ONE
  * terminal event: [onFinalResult], [onListeningError] or [onListeningEnded] (stopped without a
- * result). After a terminal event or [VoiceEngine.cancelListening] the engine must not send
- * further events for that session.
+ * result). After a terminal event, or as soon as [VoiceEngine.cancelListening] or
+ * [VoiceEngine.startListening] returns, the engine must not send further events for the previous
+ * session: it invalidates that session synchronously, even when the platform work is deferred
+ * (callbacks already queued on the main thread are dropped).
  */
 public interface VoiceEngineListener {
     public fun onListeningStarted() {}
@@ -47,10 +52,17 @@ public interface VoiceEngine {
     public var listener: VoiceEngineListener?
     public fun startListening(languageTag: String)
 
+    /** True when [ListenMode.WAKE] sessions can run offline (audio never leaves the phone). */
+    public val isWakeListeningAvailable: Boolean get() = false
+
+    public fun startListening(languageTag: String, mode: ListenMode) {
+        startListening(languageTag)
+    }
+
     /** Stop recording and deliver the final result as soon as possible. */
     public fun stopListening()
 
-    /** Stop without a result. */
+    /** Stop without a result. Invalidates the session synchronously: no events for it after this returns. */
     public fun cancelListening()
     public fun speak(text: String, utteranceId: String, languageTag: String)
     public fun stopSpeaking()

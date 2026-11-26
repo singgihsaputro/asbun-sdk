@@ -4,6 +4,7 @@ import platform.Foundation.NSDate
 import platform.Foundation.NSDateFormatter
 import platform.Foundation.dateWithTimeIntervalSince1970
 import platform.Foundation.timeIntervalSince1970
+import platform.UIKit.UIApplication
 import platform.UIKit.UIDevice
 
 actual fun epochMillis(): Long = (NSDate().timeIntervalSince1970 * 1000.0).toLong()
@@ -17,3 +18,13 @@ actual fun formatClock(epochMillis: Long): String {
 actual val platformName: String
     get() =
     "${UIDevice.currentDevice.systemName} ${UIDevice.currentDevice.systemVersion}"
+
+actual fun playWakeTone() = platform.AudioToolbox.AudioServicesPlaySystemSound(1113u)
+
+@androidx.compose.runtime.Composable
+actual fun KeepScreenOn(enabled: Boolean) {
+    androidx.compose.runtime.DisposableEffect(enabled) {
+        UIApplication.sharedApplication.idleTimerDisabled = enabled
+        onDispose { UIApplication.sharedApplication.idleTimerDisabled = false }
+    }
+}
