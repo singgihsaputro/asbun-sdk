@@ -4,9 +4,9 @@ Kotlin Multiplatform library that turns speech into app actions on Android and i
 
 Sample consumer: [Ojol Mitra](../README.md#ojol-mitra-technical-guide) in `samples/ojol-mitra/`.
 
-**Contents:** [Modules](#modules) · [Quick start](#quick-start) · [Manifest permissions](#manifest-permissions) · [Build and test](#build-and-test-the-sdk) · [Design and reference](#design-and-reference)
+**Contents:** [Modules](#modules) · [Quick start](#quick-start) · [Manifest permissions](#manifest-permissions) · [Build and test](#build-and-test-the-sdk) · [Use the SDK in another project](#use-the-sdk-in-another-project) · [Design and reference](#design-and-reference)
 
-Version 1 of the [design and reference](#design-and-reference) is implemented: manifest, on-device keyword matcher, LLM fallback over three protocols, validation, context, deeplink allowlist, confirmation, slot filling, handlers, and the Android and iOS speech engines. Not done yet: publishing to Maven and Swift Package Manager, and a run on a Mac (the iOS code compiles, but has not been linked or launched).
+Version 1 of the [design and reference](#design-and-reference) is implemented: manifest, on-device keyword matcher, LLM fallback over three protocols, validation, context, deeplink allowlist, confirmation, slot filling, handlers, and the Android and iOS speech engines. The SDK builds into artifacts other projects import (a Maven repository zip and an XCFramework zip, see [Use the SDK in another project](#use-the-sdk-in-another-project)). Not done yet: hosting them on Maven Central, GitHub Packages or a Swift package, and a run on a Mac (the iOS code compiles, but has not been linked into an app or launched).
 
 ## Modules
 
@@ -99,11 +99,63 @@ On first listen, iOS prompts for Microphone and Speech Recognition. If the user 
 ## Build and test the SDK
 
 ```bash
-./gradlew :sdk:voice-core:testDebugUnitTest            # 46 unit tests: manifest, matcher, deeplinks, LLM protocols on a mock server, resolver, dialog
+./gradlew :sdk:voice-core:testDebugUnitTest            # 50 unit tests: manifest, matcher, deeplinks, LLM protocols on a mock server, resolver, dialog
 ./gradlew :sdk:voice-android:assembleRelease           # Android library (AAR)
 ./gradlew :sdk:voice-ios:compileKotlinIosArm64         # type-checks the iOS engine; works on Linux and Windows too
 ./gradlew :sdk:voice-ios:assembleVoiceSdkXCFramework   # VoiceSdk.xcframework; needs a Mac with Xcode
 ```
+
+## Use the SDK in another project
+
+The SDK ships as two artifacts. Build them here, or download them from the **SDK artifacts** workflow under the repository's Actions tab, which builds both on every push that touches the SDK.
+
+| Artifact | Build command | For |
+| --- | --- | --- |
+| `dist/asbun-voice-sdk-<version>-maven-repo.zip` | `./gradlew sdkMavenRepoZip` (any OS) | Gradle projects: Android apps in Kotlin or Java, and Kotlin Multiplatform apps |
+| `dist/VoiceSdk-<version>.xcframework.zip` | `./gradlew :sdk:voice-ios:zipVoiceSdkXCFramework` (Mac with Xcode) | Swift apps in Xcode |
+
+The version comes from `sdkVersion` in `gradle.properties`; `-PsdkVersion=1.0.1` overrides it for one build. The group is `id.asbun.voice`.
+
+### Gradle: Android and Kotlin Multiplatform apps
+
+The zip is a Maven repository: every module with its POM and Gradle metadata, so Gradle resolves `voice-core` and its dependencies (Ktor, coroutines, serialization) on its own.
+
+1. Unzip it into your project, for example into `libs/voice-sdk-maven/`, so that `libs/voice-sdk-maven/id/asbun/voice/` exists.
+2. Add it as a repository in `settings.gradle.kts`. Keep `google()` and `mavenCentral()`, which serve the SDK's own dependencies:
+
+   ```kotlin
+   dependencyResolutionManagement {
+       repositories {
+           maven { url = uri("libs/voice-sdk-maven") }
+           google()
+           mavenCentral()
+       }
+   }
+   ```
+
+3. Add the dependency:
+
+   | Your project | Dependency |
+   | --- | --- |
+   | Android app | `implementation("id.asbun.voice:voice-android:1.0.0")` |
+   | KMP shared module | `commonMain`: `implementation("id.asbun.voice:voice-core:1.0.0")`; `androidMain`: `voice-android`; `iosMain`: `voice-ios` |
+
+`voice-android` brings `voice-core` with it and merges `RECORD_AUDIO` into your manifest (see [Manifest permissions](#manifest-permissions)). Use Kotlin 2.4 or newer and Gradle; a Maven-only build cannot pick the Android variant of `voice-core` from the POM alone.
+
+The same folder can be uploaded unchanged to any Maven host (GitHub Packages, Nexus, Artifactory) when the SDK gets a shared home. While working on the SDK itself, `./gradlew publishToMavenLocal` puts it in `~/.m2`, and a consumer with `mavenLocal()` in its repositories picks it up.
+
+### Xcode: Swift apps
+
+1. Unzip `VoiceSdk-<version>.xcframework.zip`.
+2. Drag `VoiceSdk.xcframework` into your target's **Frameworks, Libraries, and Embedded Content** and set it to **Do Not Embed**, since it is a static framework. In a Swift package, declare it as a binary target instead:
+
+   ```swift
+   .binaryTarget(name: "VoiceSdk", path: "VoiceSdk.xcframework")
+   // Once the zip is hosted somewhere; the workflow summary prints the checksum:
+   // .binaryTarget(name: "VoiceSdk", url: "https://example.com/VoiceSdk-1.0.0.xcframework.zip", checksum: "...")
+   ```
+
+3. `import VoiceSdk`, create the SDK with `VoiceSdkIos.shared.create(config: config, manifest: manifest)`, and add the two usage strings from [Manifest permissions](#manifest-permissions) to `Info.plist`.
 
 
 ## Design and reference
@@ -528,7 +580,7 @@ Phases:
 
 1. **Extract (done):** `VoiceEngine`, the voice session and both platform engines moved out of the prototype. The hard-coded parser became the manifest in `OjolMitraVoice.kt` plus the SDK's keyword matcher, and its parser tests became manifest tests.
 2. **LLM resolver (done, except a sample proxy):** the three protocols, validation, confidence and `tokenProvider`, with contract tests against a mock LLM server.
-3. **Dispatch and release (dispatch done, release open):** context, deeplinks, allowlist, confirmation and handlers are in. Still to do: publish 1.0 to Maven and Swift Package Manager.
+3. **Dispatch and release (dispatch done, release partly done):** context, deeplinks, allowlist, confirmation and handlers are in, and 1.0 builds as a Maven repository zip and an XCFramework zip. Still to do: host them on Maven Central or GitHub Packages and as a Swift package.
 4. **Later:** wake word, on-device recognition, more languages, and an optional Compose UI module based on the prototype's voice panel.
 
 ### Open questions

@@ -1,0 +1,108 @@
+# Builds the Voice Command SDK in the two forms other projects import and keeps them as
+# downloadable artifacts:
+#   - asbun-voice-sdk-<version>-maven-repo.zip: a Maven repository with every module
+#     (Android AAR, KMP and iOS klibs), for Gradle projects.
+#   - VoiceSdk-<version>.xcframework.zip: the iOS framework for Xcode and Swift Package Manager.
+name: SDK artifacts
+
+on:
+  push:
+    paths:
+      - 'sdk/**'
+      - 'gradle/**'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/sdk-artifacts.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk-artifacts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  maven-repo:
+    name: Maven repository (Android + KMP)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Run SDK unit tests
+        run: ./gradlew :sdk:voice-core:testDebugUnitTest --stacktrace
+
+      # iOS klibs cross-compile on Linux, so this one zip holds every target.
+      - name: Publish to a local Maven repository and zip it
+        id: zip
+        run: |
+          ./gradlew sdkMavenRepoZip --stacktrace
+          file=$(ls dist/asbun-voice-sdk-*-maven-repo.zip)
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Maven repository"
+            echo ""
+            echo "\`$(basename "$file")\` ($(du -h "$file" | cut -f1)), from \`${GITHUB_REF_NAME}\` at \`${GITHUB_SHA::7}\`."
+            echo "Unzip it into your project and add it as a Maven repository; see sdk/README.md, \"Use the SDK in another project\"."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Maven repository zip
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.zip.outputs.file }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+  xcframework:
+    name: VoiceSdk.xcframework (iOS)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build and zip the release XCFramework
+        id: zip
+        run: |
+          ./gradlew :sdk:voice-ios:zipVoiceSdkXCFramework --stacktrace
+          file=$(ls dist/VoiceSdk-*.xcframework.zip)
+          checksum=$(swift package compute-checksum "$file")
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+          {
+            echo "### VoiceSdk.xcframework"
+            echo ""
+            echo "\`$(basename "$file")\` ($(du -h "$file" | cut -f1)), from \`${GITHUB_REF_NAME}\` at \`${GITHUB_SHA::7}\`."
+            echo ""
+            echo "Swift Package Manager checksum, for a \`.binaryTarget(url:checksum:)\` once the zip is hosted:"
+            echo ""
+            echo "\`$checksum\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload XCFramework zip
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.zip.outputs.file }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
